@@ -25,7 +25,7 @@ ARCHIVOS = {
     "vehiculos": "data/CONFIGURACION_VEHICULAR_LIMPIO.xlsx",
     "parametros": "data/MATRIZ_CAMBIOS_PARAMETROS_LIMPIO.xlsx",
     "costos_fijos": "data/COSTO_FIJO_ACTUALIZADO.xlsx",
-    "peajes": data/PEAJES_LIMPIO.xlsx",
+    "peajes": "data/PEAJES_LIMPIO.xlsx",
     "rutas": "data/RUTA_DISTANCIA_LIMPIO.xlsx"
 }
 
