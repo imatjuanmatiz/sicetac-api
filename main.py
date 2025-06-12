@@ -21,12 +21,12 @@ class ConsultaInput(BaseModel):
 
 # Cargar todos los archivos una sola vez
 ARCHIVOS = {
-    "municipios": "municipios.xlsx",
-    "vehiculos": "CONFIGURACION_VEHICULAR_LIMPIO.xlsx",
-    "parametros": "MATRIZ_CAMBIOS_PARAMETROS_LIMPIO.xlsx",
-    "costos_fijos": "COSTO_FIJO_ACTUALIZADO.xlsx",
-    "peajes": "PEAJES_LIMPIO.xlsx",
-    "rutas": "RUTA_DISTANCIA_LIMPIO.xlsx"
+    "municipios": "data/municipios.xlsx",
+    "vehiculos": "data/CONFIGURACION_VEHICULAR_LIMPIO.xlsx",
+    "parametros": "data/MATRIZ_CAMBIOS_PARAMETROS_LIMPIO.xlsx",
+    "costos_fijos": "data/COSTO_FIJO_ACTUALIZADO.xlsx",
+    "peajes": "data/PEAJES_LIMPIO.xlsx",
+    "rutas": "data/RUTA_DISTANCIA_LIMPIO.xlsx"
 }
 
 # Dataframes cargados
