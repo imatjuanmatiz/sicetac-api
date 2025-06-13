@@ -10,7 +10,7 @@ class ConsultaInput(BaseModel):
     origen: str
     destino: str
     vehiculo: str
-    mes: str
+    mes: int
     carroceria: str = None
     valor_peaje_manual: float = 0.0
     horas_logisticas: float = None
