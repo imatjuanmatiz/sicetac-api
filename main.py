@@ -102,4 +102,8 @@ def calcular_sicetac(data: ConsultaInput):
         horas_logisticas=data.horas_logisticas
     )
 
-    return resultado
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+
+return JSONResponse(content=jsonable_encoder(resultado))
+
