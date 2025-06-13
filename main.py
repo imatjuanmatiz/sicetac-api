@@ -9,9 +9,9 @@ app = FastAPI(title="API SICETAC", version="1.1")
 class ConsultaInput(BaseModel):
     origen: str
     destino: str
-    vehiculo: str
-    mes: int
-    carroceria: str = None
+    vehiculo: str = "C3S3"
+    mes: int = 202506
+    carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
     horas_logisticas: float = None
 
@@ -32,14 +32,13 @@ df_costos_fijos = pd.read_excel(ARCHIVOS["costos_fijos"])
 df_peajes = pd.read_excel(ARCHIVOS["peajes"])
 df_rutas = pd.read_excel(ARCHIVOS["rutas"])
 
-helper = SICETACHelper(ARCHIVOS["municipios"], ARCHIVOS["vehiculos"])
+helper = SICETACHelper(ARCHIVOS["municipios"])
 
 @app.post("/consulta")
 def calcular_sicetac(data: ConsultaInput):
     # Validar origen y destino
     origen_info = helper.buscar_municipio(data.origen)
     destino_info = helper.buscar_municipio(data.destino)
-    vehiculo_info = helper.buscar_vehiculo(data.vehiculo)
 
     if not origen_info or not destino_info:
         raise HTTPException(status_code=404, detail="Origen o destino no encontrado")
@@ -69,7 +68,7 @@ def calcular_sicetac(data: ConsultaInput):
         'KM_DESPAVIMENTADO': fila_ruta.get("KM_DESPAVIMENTADO", 0),
     }
 
-    # Validar vehículo
+    # Validar vehículo directamente desde el DataFrame
     vehiculos_validos = df_vehiculos["TIPO_VEHICULO"].astype(str).str.upper().unique()
     if data.vehiculo.strip().upper() not in vehiculos_validos:
         raise HTTPException(
@@ -85,6 +84,7 @@ def calcular_sicetac(data: ConsultaInput):
             detail=f"Mes '{data.mes}' no válido. Debe ser uno de: {meses_validos}"
         )
 
+    # Ejecutar el modelo
     resultado = calcular_modelo_sicetac_extendido(
         origen=data.origen,
         destino=data.destino,
