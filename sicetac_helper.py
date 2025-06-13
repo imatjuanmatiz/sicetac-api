@@ -7,10 +7,10 @@ logging.basicConfig(level=logging.INFO)
 class SICETACHelper:
     def __init__(self, archivo_municipios, archivo_camiones):
         self.df_municipios = pd.read_excel(archivo_municipios)
-        self.df_camiones = pd.read_excel(archivo_camiones)
+        self.df_vehiculos = pd.read_excel(archivo_vehiculos)
         self.columnas_municipios = ['nombre_oficial', 'variacion_1', 'variacion_2', 'variacion_3']
         self.codigo_municipio_col = 'codigo_dane'
-        self.columnas_camiones = ['nombre_oficial', 'variante_2', 'variante_3']
+        self.columnas_vehiculos = ['nombre_oficial', 'variante_2', 'variante_3']
 
 def buscar_municipio(self, nombre_input):
     return self._buscar_codigo(
@@ -21,14 +21,14 @@ def buscar_municipio(self, nombre_input):
         ['departamento', 'nombre_oficial']
     )
 
-    def buscar_camion(self, nombre_input):
+    def buscar_vehiculo(self, nombre_input):
         return self._buscar_codigo(
-            self.df_camiones,
+            self.df_vehiculos,
             nombre_input,
-            self.columnas_camiones,
-            'codigo_carroceria',
-            ['detalle', 'TIPO_VEHICULO', 'nombre_oficial']
-        )
+        ['nombre_oficial', 'detalle', 'TIPO_VEHICULO'],
+        'codigo_carroceria',
+        ['detalle', 'TIPO_VEHICULO', 'nombre_oficial']
+    )
 
     def _buscar_codigo(self, df, nombre_input, columnas_nombres, codigo_col, extra_cols=None):
         nombre_input = str(nombre_input).strip().upper()
