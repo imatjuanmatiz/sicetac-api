@@ -39,6 +39,7 @@ def calcular_sicetac(data: ConsultaInput):
     # Validar origen y destino
     origen_info = helper.buscar_municipio(data.origen)
     destino_info = helper.buscar_municipio(data.destino)
+    vehiculo_info = helper.buscar_vehiculo(data.vehiculo)
 
     if not origen_info or not destino_info:
         raise HTTPException(status_code=404, detail="Origen o destino no encontrado")
