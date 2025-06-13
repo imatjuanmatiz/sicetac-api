@@ -5,9 +5,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 class SICETACHelper:
-    def __init__(self, archivo_municipios, archivo_camiones):
+    def __init__(self, archivo_municipios):
         self.df_municipios = pd.read_excel(archivo_municipios)
-        self.df_vehiculos = pd.read_excel(archivo_camiones)
         self.columnas_municipios = ['nombre_oficial', 'variacion_1', 'variacion_2', 'variacion_3']
         self.codigo_municipio_col = 'codigo_dane'
 
@@ -23,20 +22,6 @@ class SICETACHelper:
             logging.info(f"✔ Municipio encontrado: {resultado}")
         else:
             logging.warning(f"✘ Municipio NO encontrado: {nombre_input}")
-        return resultado
-
-    def buscar_vehiculo(self, nombre_input):
-        resultado = self._buscar_codigo(
-            self.df_vehiculos,
-            nombre_input,
-            ['nombre_oficial', 'detalle', 'TIPO_VEHICULO'],
-            'codigo_carroceria',
-            ['detalle', 'TIPO_VEHICULO', 'nombre_oficial']
-        )
-        if resultado:
-            logging.info(f"✔ Vehículo encontrado: {resultado}")
-        else:
-            logging.warning(f"✘ Vehículo NO encontrado: {nombre_input}")
         return resultado
 
     def _buscar_codigo(self, df, nombre_input, columnas_nombres, codigo_col, extra_cols=None):
