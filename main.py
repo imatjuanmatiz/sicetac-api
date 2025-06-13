@@ -15,8 +15,12 @@ class ConsultaInput(BaseModel):
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
     horas_logisticas: float = None
+    km_plano: float = 0
+    km_ondulado: float = 0
+    km_montañoso: float = 0
+    km_urbano: float = 0
+    km_despavimentado: float = 0
 
-# Cargar archivos
 ARCHIVOS = {
     "municipios": "municipios.xlsx",
     "vehiculos": "CONFIGURACION_VEHICULAR_LIMPIO.xlsx",
@@ -35,7 +39,6 @@ df_rutas = pd.read_excel(ARCHIVOS["rutas"])
 
 helper = SICETACHelper(ARCHIVOS["municipios"])
 
-# Función auxiliar para convertir objetos numpy a tipos nativos
 def convertir_nativos(d):
     if isinstance(d, dict):
         return {k: convertir_nativos(v) for k, v in d.items()}
@@ -48,39 +51,47 @@ def convertir_nativos(d):
 
 @app.post("/consulta")
 def calcular_sicetac(data: ConsultaInput):
-    # Validar origen y destino
     origen_info = helper.buscar_municipio(data.origen)
     destino_info = helper.buscar_municipio(data.destino)
 
     if not origen_info or not destino_info:
         raise HTTPException(status_code=404, detail="Origen o destino no encontrado")
 
-    # Validar existencia de la ruta
     cod_origen = origen_info["codigo_dane"]
     cod_destino = destino_info["codigo_dane"]
+
     ruta = df_rutas[
         (df_rutas["codigo_dane_origen"] == cod_origen) &
         (df_rutas["codigo_dane_destino"] == cod_destino)
     ]
-
     if ruta.empty:
         ruta = df_rutas[
             (df_rutas["codigo_dane_origen"] == cod_destino) &
             (df_rutas["codigo_dane_destino"] == cod_origen)
         ]
-        if ruta.empty:
-            raise HTTPException(status_code=404, detail="Ruta no registrada entre los municipios seleccionados")
 
-    fila_ruta = ruta.iloc[0]
-    distancias = {
-        'KM_PLANO': fila_ruta.get("KM_PLANO", 0),
-        'KM_ONDULADO': fila_ruta.get("KM_ONDULADO", 0),
-        'KM_MONTAÑOSO': fila_ruta.get("KM_MONTAÑOSO", 0),
-        'KM_URBANO': fila_ruta.get("KM_URBANO", 0),
-        'KM_DESPAVIMENTADO': fila_ruta.get("KM_DESPAVIMENTADO", 0),
-    }
+    if ruta.empty:
+        if any([data.km_plano, data.km_ondulado, data.km_montañoso, data.km_urbano, data.km_despavimentado]):
+            fila_ruta = None
+            distancias = {
+                'KM_PLANO': data.km_plano,
+                'KM_ONDULADO': data.km_ondulado,
+                'KM_MONTAÑOSO': data.km_montañoso,
+                'KM_URBANO': data.km_urbano,
+                'KM_DESPAVIMENTADO': data.km_despavimentado,
+            }
+        else:
+            raise HTTPException(status_code=404, detail="Ruta no registrada y no se proporcionaron distancias manuales")
+    else:
+        fila_ruta = ruta.iloc[0]
+        distancias = {
+            'KM_PLANO': fila_ruta.get("KM_PLANO", 0),
+            'KM_ONDULADO': fila_ruta.get("KM_ONDULADO", 0),
+            'KM_MONTAÑOSO': fila_ruta.get("KM_MONTAÑOSO", 0),
+            'KM_URBANO': fila_ruta.get("KM_URBANO", 0),
+            'KM_DESPAVIMENTADO': fila_ruta.get("KM_DESPAVIMENTADO", 0),
+        }
 
-    # Validar vehículo directamente desde el DataFrame
     vehiculos_validos = df_vehiculos["TIPO_VEHICULO"].astype(str).str.upper().unique()
     if data.vehiculo.strip().upper() not in vehiculos_validos:
         raise HTTPException(
@@ -88,7 +99,6 @@ def calcular_sicetac(data: ConsultaInput):
             detail=f"Vehículo '{data.vehiculo}' no encontrado. Opciones válidas: {', '.join(vehiculos_validos)}"
         )
 
-    # Validar mes
     meses_validos = df_parametros["MES"].unique().tolist()
     if int(data.mes) not in meses_validos:
         raise HTTPException(
@@ -96,7 +106,6 @@ def calcular_sicetac(data: ConsultaInput):
             detail=f"Mes '{data.mes}' no válido. Debe ser uno de: {meses_validos}"
         )
 
-    # Ejecutar el modelo
     resultado = calcular_modelo_sicetac_extendido(
         origen=data.origen,
         destino=data.destino,
