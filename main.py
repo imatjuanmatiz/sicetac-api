@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pandas as pd
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sicetac_helper import SICETACHelper
 from modelo_sicetac import calcular_modelo_sicetac_extendido
 
@@ -102,8 +104,4 @@ def calcular_sicetac(data: ConsultaInput):
         horas_logisticas=data.horas_logisticas
     )
 
-from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
-
-return JSONResponse(content=jsonable_encoder(resultado))
-
+    return JSONResponse(content=jsonable_encoder(resultado))  # ✅ DENTRO de la función
