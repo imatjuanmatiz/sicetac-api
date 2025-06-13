@@ -12,14 +12,14 @@ class SICETACHelper:
         self.codigo_municipio_col = 'codigo_dane'
         self.columnas_camiones = ['nombre_oficial', 'variante_2', 'variante_3']
 
-    def buscar_municipio(self, nombre_input):
-        return self._buscar_codigo(
-            self.df_municipios,
-            nombre_input,
-            self.columnas_municipios,
-            'codigo_municipio',
-            ['departamento', 'nombre_oficial']
-        )
+def buscar_municipio(self, nombre_input):
+    return self._buscar_codigo(
+        self.df_municipios,
+        nombre_input,
+        self.columnas_municipios,
+        self.codigo_municipio_col,  # ahora correctamente apunta a 'codigo_dane'
+        ['departamento', 'nombre_oficial']
+    )
 
     def buscar_camion(self, nombre_input):
         return self._buscar_codigo(
