@@ -1,34 +1,43 @@
-
 import pandas as pd
 from difflib import get_close_matches
 import logging
+
 logging.basicConfig(level=logging.INFO)
 
 class SICETACHelper:
     def __init__(self, archivo_municipios, archivo_camiones):
         self.df_municipios = pd.read_excel(archivo_municipios)
-        self.df_vehiculos = pd.read_excel(archivo_vehiculos)
+        self.df_vehiculos = pd.read_excel(archivo_camiones)
         self.columnas_municipios = ['nombre_oficial', 'variacion_1', 'variacion_2', 'variacion_3']
         self.codigo_municipio_col = 'codigo_dane'
-        self.columnas_vehiculos = ['nombre_oficial', 'variante_2', 'variante_3']
 
-def buscar_municipio(self, nombre_input):
-    return self._buscar_codigo(
-        self.df_municipios,
-        nombre_input,
-        self.columnas_municipios,
-        self.codigo_municipio_col,  # ahora correctamente apunta a 'codigo_dane'
-        ['departamento', 'nombre_oficial']
-    )
+    def buscar_municipio(self, nombre_input):
+        resultado = self._buscar_codigo(
+            self.df_municipios,
+            nombre_input,
+            self.columnas_municipios,
+            self.codigo_municipio_col,
+            ['departamento', 'nombre_oficial']
+        )
+        if resultado:
+            logging.info(f"✔ Municipio encontrado: {resultado}")
+        else:
+            logging.warning(f"✘ Municipio NO encontrado: {nombre_input}")
+        return resultado
 
     def buscar_vehiculo(self, nombre_input):
-        return self._buscar_codigo(
+        resultado = self._buscar_codigo(
             self.df_vehiculos,
             nombre_input,
-        ['nombre_oficial', 'detalle', 'TIPO_VEHICULO'],
-        'codigo_carroceria',
-        ['detalle', 'TIPO_VEHICULO', 'nombre_oficial']
-    )
+            ['nombre_oficial', 'detalle', 'TIPO_VEHICULO'],
+            'codigo_carroceria',
+            ['detalle', 'TIPO_VEHICULO', 'nombre_oficial']
+        )
+        if resultado:
+            logging.info(f"✔ Vehículo encontrado: {resultado}")
+        else:
+            logging.warning(f"✘ Vehículo NO encontrado: {nombre_input}")
+        return resultado
 
     def _buscar_codigo(self, df, nombre_input, columnas_nombres, codigo_col, extra_cols=None):
         nombre_input = str(nombre_input).strip().upper()
@@ -44,7 +53,6 @@ def buscar_municipio(self, nombre_input):
                                 result[c] = row[c]
                     return result
 
-        # Si no se encontró una coincidencia exacta, hacer fuzzy match
         for col in columnas_nombres:
             if col in df.columns:
                 opciones = df[col].dropna().astype(str).str.upper().unique().tolist()
@@ -67,8 +75,8 @@ def buscar_municipio(self, nombre_input):
         cod_destino = self.buscar_municipio(destino_input)
         if cod_origen and cod_destino:
             existe = df_rutas[
-                (df_rutas['COD_DANE_ORIGEN'] == cod_origen['codigo_municipio']) &
-                (df_rutas['COD_DANE_DESTINO'] == cod_destino['codigo_municipio'])
+                (df_rutas['codigo_dane_origen'] == cod_origen['codigo_dane']) &
+                (df_rutas['codigo_dane_destino'] == cod_destino['codigo_dane'])
             ]
             return not existe.empty
         return False
