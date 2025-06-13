@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pandas as pd
-from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sicetac_helper import SICETACHelper
 from modelo_sicetac import calcular_modelo_sicetac_extendido
@@ -35,6 +34,17 @@ df_peajes = pd.read_excel(ARCHIVOS["peajes"])
 df_rutas = pd.read_excel(ARCHIVOS["rutas"])
 
 helper = SICETACHelper(ARCHIVOS["municipios"])
+
+# Función auxiliar para convertir objetos numpy a tipos nativos
+def convertir_nativos(d):
+    if isinstance(d, dict):
+        return {k: convertir_nativos(v) for k, v in d.items()}
+    elif isinstance(d, list):
+        return [convertir_nativos(v) for v in d]
+    elif hasattr(d, 'item'):
+        return d.item()
+    else:
+        return d
 
 @app.post("/consulta")
 def calcular_sicetac(data: ConsultaInput):
@@ -104,4 +114,5 @@ def calcular_sicetac(data: ConsultaInput):
         horas_logisticas=data.horas_logisticas
     )
 
-    return JSONResponse(content=jsonable_encoder(resultado))  # ✅ DENTRO de la función
+    resultado_convertido = convertir_nativos(resultado)
+    return JSONResponse(content=resultado_convertido)
