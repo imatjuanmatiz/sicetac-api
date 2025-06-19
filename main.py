@@ -59,24 +59,36 @@ def obtener_valor_mercado(mes, cod_origen, cod_destino, config):
     config = config.strip().upper()
     clave_ruta = f"{cod_origen}-{cod_destino}"
     fila = df_valores_mercado[
-        (df_valores_mercado["MES"] == str(mes)) &
         (df_valores_mercado["RUTA_ANALISIS"] == clave_ruta) &
         (df_valores_mercado["CONFIGURACION_ANALISIS"] == config)
     ]
     if fila.empty:
         return "No disponible"
+    fila_ordenada = fila.sort_values("MES")
+    return {
+        str(row.MES): round(row.VALOR_PROMEDIO_MERCADO, 0)
+        for _, row in fila_ordenada.iterrows()
+    }"No disponible"
     return round(fila.iloc[0]["VALOR_PROMEDIO_MERCADO"], 0)
 
 def obtener_indicadores(codigo, mes, config):
     mes = str(mes)
     config = config.strip().upper()
     fila = df_indicadores[
-        (df_indicadores["MES"] == str(mes)) &
         (df_indicadores["CODIGO_OBJETIVO"] == codigo) &
         (df_indicadores["CONFIGURACION"] == config)
     ]
     if fila.empty:
-        return {"viajes_cargue": "ND", "viajes_descargue": "ND", "indice": "ND"}
+        return {}
+    fila_ordenada = fila.sort_values("AÑOMES")
+    return {
+        str(row["AÑOMES"]): {
+            "viajes_cargue": int(row["VIAJES_ORIGINADOS"]),
+            "viajes_descargue": int(row["VIAJES_DESCARGADOS"]),
+            "indice": round(row["INDICE_CARGUE_DESCARGUE"], 2)
+        }
+        for _, row in fila_ordenada.iterrows()
+    }{"viajes_cargue": "ND", "viajes_descargue": "ND", "indice": "ND"}
     f = fila.iloc[0]
     return {
         "viajes_cargue": int(f["VIAJES_ORIGINADOS"]),
