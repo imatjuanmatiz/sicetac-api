@@ -71,7 +71,7 @@ def obtener_indicadores(codigo, mes, config):
     mes = str(mes)
     config = config.strip().upper()
     fila = df_indicadores[
-        (df_indicadores["AÑOMES"] == str(mes)) &
+        (df_indicadores["MES"] == str(mes)) &
         (df_indicadores["CODIGO_OBJETIVO"] == codigo) &
         (df_indicadores["CONFIGURACION"] == config)
     ]
