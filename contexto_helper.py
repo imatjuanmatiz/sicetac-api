@@ -6,7 +6,7 @@ df_indicadores = pd.read_csv("indice_cargue_descargue_resumen_mensual.csv")
 df_competitividad = pd.read_csv("competitividad_rutas_2025.csv")
 
 def estandarizar_codigo_dane(codigo):
-    return str(codigo).zfill(7)
+    return str(codigo).zfill(8)
 
 def obtener_valor_mercado(cod_origen, cod_destino, config):
     config = config.strip().upper()
