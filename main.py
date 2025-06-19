@@ -59,7 +59,7 @@ def obtener_valor_mercado(mes, cod_origen, cod_destino, config):
     config = config.strip().upper()
     clave_ruta = f"{cod_origen}-{cod_destino}"
     fila = df_valores_mercado[
-        (df_valores_mercado["MES"] == mes) &
+        (df_valores_mercado["MES"] == str(mes)) &
         (df_valores_mercado["RUTA_ANALISIS"] == clave_ruta) &
         (df_valores_mercado["CONFIGURACION_ANALISIS"] == config)
     ]
