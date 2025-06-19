@@ -55,8 +55,13 @@ def convertir_nativos(d):
     else:
         return d
 
-def obtener_valor_mercado(mes, ruta_config):
-    fila = df_valores_mercado[(df_valores_mercado["MES"] == mes) & (df_valores_mercado["RUTA_CONFIGURACION"] == ruta_config)]
+def obtener_valor_mercado(mes, cod_origen, cod_destino, config):
+    clave_ruta = f"{cod_origen}-{cod_destino}"
+    fila = df_valores_mercado[
+        (df_valores_mercado["MES"] == mes) &
+        (df_valores_mercado["RUTA_ANALISIS"] == clave_ruta) &
+        (df_valores_mercado["CONFIGURACION_ANALISIS"] == config)
+    ]
     if fila.empty:
         return "No disponible"
     return round(fila.iloc[0]["VALOR_PROMEDIO_MERCADO"], 0)
@@ -78,9 +83,9 @@ def obtener_indicadores(codigo):
     }
 
 def evaluar_competitividad(cod_origen, cod_destino, config):
+    clave_ruta = f"{cod_origen}-{cod_destino}"
     fila = df_competitividad[
-        (df_competitividad["CODIGO_ORIGEN"] == cod_origen) &
-        (df_competitividad["CODIGO_DESTINO"] == cod_destino) &
+        (df_competitividad["RUTA"] == clave_ruta) &
         (df_competitividad["CONFIGURACION"] == config)
     ]
     if fila.empty:
@@ -178,9 +183,7 @@ def calcular_sicetac(data: ConsultaInput):
 
     resultado_convertido = convertir_nativos(resultado)
 
-    # Enriquecimiento de contexto
-    clave_ruta_config = f"{cod_origen}-{cod_destino}-{data.vehiculo}"
-    valor_mercado = obtener_valor_mercado(data.mes, clave_ruta_config)
+    valor_mercado = obtener_valor_mercado(data.mes, cod_origen, cod_destino, data.vehiculo)
     ind_origen = obtener_indicadores(cod_origen)
     ind_destino = obtener_indicadores(cod_destino)
     competitividad = evaluar_competitividad(cod_origen, cod_destino, data.vehiculo)
