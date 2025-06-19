@@ -4,8 +4,14 @@ import pandas as pd
 from fastapi.responses import JSONResponse
 from sicetac_helper import SICETACHelper
 from modelo_sicetac import calcular_modelo_sicetac_extendido
+from contexto_helper import (
+    obtener_valor_mercado,
+    obtener_indicadores,
+    evaluar_competitividad,
+    obtener_meses_disponibles
+)
 
-app = FastAPI(title="API SICETAC", version="1.2")
+app = FastAPI(title="API SICETAC", version="1.3")
 
 class ConsultaInput(BaseModel):
     origen: str
@@ -30,20 +36,13 @@ ARCHIVOS = {
     "rutas": "RUTA_DISTANCIA_LIMPIO.xlsx"
 }
 
-# Archivos extendidos
-df_municipios = pd.read_excel(ARCHIVOS["municipios"])
+# Carga fija de archivos base
+helper = SICETACHelper(ARCHIVOS["municipios"])
 df_vehiculos = pd.read_excel(ARCHIVOS["vehiculos"])
 df_parametros = pd.read_excel(ARCHIVOS["parametros"])
 df_costos_fijos = pd.read_excel(ARCHIVOS["costos_fijos"])
 df_peajes = pd.read_excel(ARCHIVOS["peajes"])
 df_rutas = pd.read_excel(ARCHIVOS["rutas"])
-
-# Nuevas fuentes de contexto
-df_valores_mercado = pd.read_csv("VALORES_CONSOLIDADOS_2025.csv")
-df_indicadores = pd.read_csv("indice_cargue_descargue_resumen_mensual.csv")
-df_competitividad = pd.read_csv("competitividad_rutas_2025.csv")
-
-helper = SICETACHelper(ARCHIVOS["municipios"])
 
 def convertir_nativos(d):
     if isinstance(d, dict):
@@ -54,73 +53,6 @@ def convertir_nativos(d):
         return d.item()
     else:
         return d
-
-def obtener_valor_mercado(mes, cod_origen, cod_destino, config):
-    config = config.strip().upper()
-    clave_ruta = f"{cod_origen}-{cod_destino}"
-    fila = df_valores_mercado[
-        (df_valores_mercado["RUTA_ANALISIS"] == clave_ruta) &
-        (df_valores_mercado["CONFIGURACION_ANALISIS"] == config)
-    ]
-    if fila.empty:
-        return "No disponible"
-    fila_ordenada = fila.sort_values("MES")
-    return {
-        str(row.MES): round(row.VALOR_PROMEDIO_MERCADO, 0)
-        for _, row in fila_ordenada.iterrows()
-    }"No disponible"
-    return round(fila.iloc[0]["VALOR_PROMEDIO_MERCADO"], 0)
-
-def obtener_indicadores(codigo, mes, config):
-    mes = str(mes)
-    config = config.strip().upper()
-    fila = df_indicadores[
-        (df_indicadores["CODIGO_OBJETIVO"] == codigo) &
-        (df_indicadores["CONFIGURACION"] == config)
-    ]
-    if fila.empty:
-        return {}
-    fila_ordenada = fila.sort_values("AÑOMES")
-    return {
-        str(row["AÑOMES"]): {
-            "viajes_cargue": int(row["VIAJES_ORIGINADOS"]),
-            "viajes_descargue": int(row["VIAJES_DESCARGADOS"]),
-            "indice": round(row["INDICE_CARGUE_DESCARGUE"], 2)
-        }
-        for _, row in fila_ordenada.iterrows()
-    }{"viajes_cargue": "ND", "viajes_descargue": "ND", "indice": "ND"}
-    f = fila.iloc[0]
-    return {
-        "viajes_cargue": int(f["VIAJES_ORIGINADOS"]),
-        "viajes_descargue": int(f["VIAJES_DESCARGADOS"]),
-        "indice": round(f["INDICE_CARGUE_DESCARGUE"], 2)
-    }
-
-def evaluar_competitividad(cod_origen, cod_destino, config):
-    config = config.strip().upper()
-    clave_ruta = f"{cod_origen}-{cod_destino}"
-    fila = df_competitividad[
-        (df_competitividad["RUTA"] == clave_ruta) &
-        (df_competitividad["CONFIGURACION"] == config)
-    ]
-    if fila.empty:
-        return {"nivel": "ND", "empresas": "ND", "participacion": "ND"}
-
-    f = fila.iloc[0]
-    top1 = f["PARTICIPACION_MAXIMA"]
-    if top1 >= 0.6:
-        nivel = "Muy baja"
-    elif top1 >= 0.4:
-        nivel = "Baja"
-    elif top1 >= 0.25:
-        nivel = "Media"
-    else:
-        nivel = "Alta"
-    return {
-        "nivel": nivel,
-        "empresas": int(f["NUM_EMPRESAS"]),
-        "participacion": round(top1 * 100, 1)
-    }
 
 @app.post("/consulta")
 def calcular_sicetac(data: ConsultaInput):
@@ -198,9 +130,10 @@ def calcular_sicetac(data: ConsultaInput):
 
     resultado_convertido = convertir_nativos(resultado)
 
-    valor_mercado = obtener_valor_mercado(data.mes, cod_origen, cod_destino, data.vehiculo)
-    ind_origen = obtener_indicadores(cod_origen, data.mes, data.vehiculo)
-    ind_destino = obtener_indicadores(cod_destino, data.mes, data.vehiculo)
+    clave_ruta = f"{cod_origen}-{cod_destino}"
+    valor_mercado = obtener_valor_mercado(cod_origen, cod_destino, data.vehiculo)
+    ind_origen = obtener_indicadores(cod_origen, data.vehiculo)
+    ind_destino = obtener_indicadores(cod_destino, data.vehiculo)
     competitividad = evaluar_competitividad(cod_origen, cod_destino, data.vehiculo)
 
     respuesta = {
@@ -208,7 +141,28 @@ def calcular_sicetac(data: ConsultaInput):
         "VALOR_MERCADO_2025": valor_mercado,
         "INDICADORES_ORIGEN": ind_origen,
         "INDICADORES_DESTINO": ind_destino,
-        "COMPETITIVIDAD": competitividad
+        "COMPETITIVIDAD": competitividad,
+        "MESES_MERCADO_DISPONIBLES": obtener_meses_disponibles(
+            df=pd.read_csv("VALORES_CONSOLIDADOS_2025.csv"),
+            clave_ruta=clave_ruta,
+            config=data.vehiculo
+        ),
+        "MESES_INDICADORES_ORIGEN": obtener_meses_disponibles(
+            df=pd.read_csv("indice_cargue_descargue_resumen_mensual.csv"),
+            clave_ruta=cod_origen,
+            config=data.vehiculo,
+            campo_ruta="CODIGO_OBJETIVO",
+            campo_config="CONFIGURACION",
+            campo_mes="AÑOMES"
+        ),
+        "MESES_INDICADORES_DESTINO": obtener_meses_disponibles(
+            df=pd.read_csv("indice_cargue_descargue_resumen_mensual.csv"),
+            clave_ruta=cod_destino,
+            config=data.vehiculo,
+            campo_ruta="CODIGO_OBJETIVO",
+            campo_config="CONFIGURACION",
+            campo_mes="AÑOMES"
+        )
     }
 
     return JSONResponse(content=respuesta)
