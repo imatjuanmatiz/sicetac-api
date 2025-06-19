@@ -56,6 +56,7 @@ def convertir_nativos(d):
         return d
 
 def obtener_valor_mercado(mes, cod_origen, cod_destino, config):
+    config = config.strip().upper()
     clave_ruta = f"{cod_origen}-{cod_destino}"
     fila = df_valores_mercado[
         (df_valores_mercado["MES"] == mes) &
@@ -67,6 +68,8 @@ def obtener_valor_mercado(mes, cod_origen, cod_destino, config):
     return round(fila.iloc[0]["VALOR_PROMEDIO_MERCADO"], 0)
 
 def obtener_indicadores(codigo, mes, config):
+    mes = str(mes)
+    config = config.strip().upper()
     fila = df_indicadores[
         (df_indicadores["AÑOMES"] == str(mes)) &
         (df_indicadores["CODIGO_OBJETIVO"] == codigo) &
@@ -82,6 +85,7 @@ def obtener_indicadores(codigo, mes, config):
     }
 
 def evaluar_competitividad(cod_origen, cod_destino, config):
+    config = config.strip().upper()
     clave_ruta = f"{cod_origen}-{cod_destino}"
     fila = df_competitividad[
         (df_competitividad["RUTA"] == clave_ruta) &
