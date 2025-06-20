@@ -36,7 +36,7 @@ ARCHIVOS = {
     "rutas": "RUTA_DISTANCIA_LIMPIO.xlsx"
 }
 
-# Carga fija de archivos base
+# Carga fija
 helper = SICETACHelper(ARCHIVOS["municipios"])
 df_vehiculos = pd.read_excel(ARCHIVOS["vehiculos"])
 df_parametros = pd.read_excel(ARCHIVOS["parametros"])
@@ -97,8 +97,10 @@ def calcular_sicetac(data: ConsultaInput):
             'KM_DESPAVIMENTADO': fila_ruta.get("KM_DESPAVIMENTADO", 0),
         }
 
-    vehiculos_validos = df_vehiculos["TIPO_VEHICULO"].astype(str).str.upper().unique()
-    if data.vehiculo.strip().upper() not in vehiculos_validos:
+    vehiculo_upper = data.vehiculo.strip().upper().replace("C", "")
+    vehiculos_validos = df_vehiculos["TIPO_VEHICULO"].astype(str).str.upper().str.replace("C", "").unique()
+
+    if vehiculo_upper not in vehiculos_validos:
         raise HTTPException(
             status_code=400,
             detail=f"Vehículo '{data.vehiculo}' no encontrado. Opciones válidas: {', '.join(vehiculos_validos)}"
@@ -130,35 +132,31 @@ def calcular_sicetac(data: ConsultaInput):
 
     resultado_convertido = convertir_nativos(resultado)
 
-    clave_ruta = f"{cod_origen}-{cod_destino}"
-    valor_mercado = obtener_valor_mercado(cod_origen, cod_destino, data.vehiculo)
-    ind_origen = obtener_indicadores(cod_origen, data.vehiculo)
-    ind_destino = obtener_indicadores(cod_destino, data.vehiculo)
-    competitividad = evaluar_competitividad(cod_origen, cod_destino, data.vehiculo)
+    clave_ruta_config = f"{cod_origen}-{cod_destino}-{vehiculo_upper}"
 
     respuesta = {
         "SICETAC": resultado_convertido,
-        "VALOR_MERCADO_2025": valor_mercado,
-        "INDICADORES_ORIGEN": ind_origen,
-        "INDICADORES_DESTINO": ind_destino,
-        "COMPETITIVIDAD": competitividad,
+        "VALOR_MERCADO_2025": obtener_valor_mercado(cod_origen, cod_destino, vehiculo_upper),
+        "INDICADORES_ORIGEN": obtener_indicadores(cod_origen, vehiculo_upper),
+        "INDICADORES_DESTINO": obtener_indicadores(cod_destino, vehiculo_upper),
+        "COMPETITIVIDAD": evaluar_competitividad(cod_origen, cod_destino, vehiculo_upper),
         "MESES_MERCADO_DISPONIBLES": obtener_meses_disponibles(
-            df=pd.read_csv("VALORES_CONSOLIDADOS_2025.csv"),
-            clave_ruta=clave_ruta,
-            config=data.vehiculo
+            df=pd.read_excel("VALORES_CONSOLIDADOS_2025.xlsx"),
+            clave_ruta=clave_ruta_config,
+            config=vehiculo_upper
         ),
         "MESES_INDICADORES_ORIGEN": obtener_meses_disponibles(
-            df=pd.read_csv("indice_cargue_descargue_resumen_mensual.csv"),
-            clave_ruta=cod_origen,
-            config=data.vehiculo,
+            df=pd.read_excel("indice_cargue_descargue_resumen_mensual.xlsx"),
+            clave_ruta=int(cod_origen),
+            config=vehiculo_upper,
             campo_ruta="CODIGO_OBJETIVO",
             campo_config="CONFIGURACION",
             campo_mes="AÑOMES"
         ),
         "MESES_INDICADORES_DESTINO": obtener_meses_disponibles(
-            df=pd.read_csv("indice_cargue_descargue_resumen_mensual.csv"),
-            clave_ruta=cod_destino,
-            config=data.vehiculo,
+            df=pd.read_excel("indice_cargue_descargue_resumen_mensual.xlsx"),
+            clave_ruta=int(cod_destino),
+            config=vehiculo_upper,
             campo_ruta="CODIGO_OBJETIVO",
             campo_config="CONFIGURACION",
             campo_mes="AÑOMES"
