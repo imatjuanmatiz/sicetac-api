@@ -5,13 +5,14 @@ from fastapi.responses import JSONResponse
 from sicetac_helper import SICETACHelper
 from modelo_sicetac import calcular_modelo_sicetac_extendido
 from contexto_helper import (
-    obtener_valor_mercado,
+    obtener_valores_promedio_mercado,
     obtener_indicadores,
     evaluar_competitividad,
-    obtener_meses_disponibles
+    obtener_meses_disponibles_mercado,
+    obtener_meses_disponibles_indicador
 )
 
-app = FastAPI(title="API SICETAC", version="1.3")
+app = FastAPI(title="API SICETAC", version="1.4")
 
 class ConsultaInput(BaseModel):
     origen: str
@@ -43,6 +44,7 @@ df_parametros = pd.read_excel(ARCHIVOS["parametros"])
 df_costos_fijos = pd.read_excel(ARCHIVOS["costos_fijos"])
 df_peajes = pd.read_excel(ARCHIVOS["peajes"])
 df_rutas = pd.read_excel(ARCHIVOS["rutas"])
+df_indicadores = pd.read_excel("indice_cargue_descargue_resumen_mensual.xlsx")
 
 def convertir_nativos(d):
     if isinstance(d, dict):
@@ -65,6 +67,7 @@ def calcular_sicetac(data: ConsultaInput):
     cod_origen = origen_info["codigo_dane"]
     cod_destino = destino_info["codigo_dane"]
 
+    # Buscar ruta en la base
     ruta = df_rutas[
         (df_rutas["codigo_dane_origen"] == cod_origen) &
         (df_rutas["codigo_dane_destino"] == cod_destino)
@@ -113,6 +116,7 @@ def calcular_sicetac(data: ConsultaInput):
             detail=f"Mes '{data.mes}' no válido. Debe ser uno de: {meses_validos}"
         )
 
+    # Calcular SICETAC
     resultado = calcular_modelo_sicetac_extendido(
         origen=data.origen,
         destino=data.destino,
@@ -132,35 +136,16 @@ def calcular_sicetac(data: ConsultaInput):
 
     resultado_convertido = convertir_nativos(resultado)
 
-    clave_ruta_config = f"{cod_origen}-{cod_destino}-{vehiculo_upper}"
-
+    # Compilar respuesta
     respuesta = {
         "SICETAC": resultado_convertido,
-        "VALOR_MERCADO_2025": obtener_valor_mercado(cod_origen, cod_destino, vehiculo_upper),
+        "HISTORICO_VALOR_MERCADO": obtener_valores_promedio_mercado(cod_origen, cod_destino, vehiculo_upper),
         "INDICADORES_ORIGEN": obtener_indicadores(cod_origen, vehiculo_upper),
         "INDICADORES_DESTINO": obtener_indicadores(cod_destino, vehiculo_upper),
         "COMPETITIVIDAD": evaluar_competitividad(cod_origen, cod_destino, vehiculo_upper),
-        "MESES_MERCADO_DISPONIBLES": obtener_meses_disponibles(
-            df=pd.read_excel("VALORES_CONSOLIDADOS_2025.xlsx"),
-            clave_ruta=clave_ruta_config,
-            config=vehiculo_upper
-        ),
-        "MESES_INDICADORES_ORIGEN": obtener_meses_disponibles(
-            df=pd.read_excel("indice_cargue_descargue_resumen_mensual.xlsx"),
-            clave_ruta=int(cod_origen),
-            config=vehiculo_upper,
-            campo_ruta="CODIGO_OBJETIVO",
-            campo_config="CONFIGURACION",
-            campo_mes="AÑOMES"
-        ),
-        "MESES_INDICADORES_DESTINO": obtener_meses_disponibles(
-            df=pd.read_excel("indice_cargue_descargue_resumen_mensual.xlsx"),
-            clave_ruta=int(cod_destino),
-            config=vehiculo_upper,
-            campo_ruta="CODIGO_OBJETIVO",
-            campo_config="CONFIGURACION",
-            campo_mes="AÑOMES"
-        )
+        "MESES_MERCADO_DISPONIBLES": obtener_meses_disponibles_mercado(cod_origen, cod_destino, vehiculo_upper),
+        "MESES_INDICADORES_ORIGEN": obtener_meses_disponibles_indicador(df_indicadores, cod_origen, vehiculo_upper),
+        "MESES_INDICADORES_DESTINO": obtener_meses_disponibles_indicador(df_indicadores, cod_destino, vehiculo_upper)
     }
 
     return JSONResponse(content=respuesta)
