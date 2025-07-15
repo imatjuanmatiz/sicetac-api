@@ -195,17 +195,9 @@ def calcular_sicetac(data: ConsultaInput):
 
 
 @app.get("/consulta_bloqueos")
-def consulta_bloqueos(origen_dane: int, destino_dane: int, mes: int = None):
+def consulta_bloqueos(origen_dane: int, destino_dane: int):
     """
-    Endpoint robusto para obtener bloqueos en una ruta según origen y destino.
+    Endpoint para obtener bloqueos históricos en una ruta según origen y destino.
     """
-    try:
-        resultado = obtener_bloqueos_ruta(origen_dane, destino_dane, mes)
-        return resultado
-    except Exception as e:
-        return {
-            "total_bloqueos": 0,
-            "lista_bloqueos": [],
-            "error": str(e),
-            "fuente": "Datos proporcionados por Colfecar"
-        }
+    resultado = obtener_bloqueos_ruta(origen_dane, destino_dane)
+    return resultado
