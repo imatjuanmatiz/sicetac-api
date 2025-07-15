@@ -163,25 +163,42 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
         (df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)) &
         (df_bloqueos["AÑOMES"] == mes)
     ]
-
-    if bloqueos.empty:
+if bloqueos.empty:
         return {
             "total_bloqueos": 0,
-            "lista_bloqueos": [],
-            "fuente": "Datos proporcionados por Colfecar"
+            "resumen_departamentos": [],
+            "fuente": "Datos proporcionados por Colfecar",
+            "mes_consultado": int(mes) if mes is not None else None
         }
 
-    # Seleccionar columnas relevantes (ajusta nombres según tu base)
-    lista = bloqueos[[ 
-        "DEPARTAMENTO SICE", 
-        "VIA AFECTADA", 
-        "MOTIVO DE LA MANIFESTACIÓN", 
-        "TOTAL HORAS DE AFECTACION " 
-    ]].to_dict(orient="records")
+    # Agrupa por departamento y arma el resumen
+    resumen_departamentos = []
+    for depto in departamentos:
+        bloqueos_depto = bloqueos[bloqueos["DEPARTAMENTO SICE"] == depto]
+        if not bloqueos_depto.empty:
+            # Principales motivos (puedes poner los 2 más frecuentes si quieres)
+            motivos = bloqueos_depto["MOTIVO DE LA MANIFESTACIÓN"].value_counts().index.tolist()
+            # Horas totales de afectación (puede requerir limpieza de datos si son texto)
+            try:
+                horas_total = bloqueos_depto["TOTAL HORAS DE AFECTACION "].astype(float).sum()
+            except Exception:
+                horas_total = None  # por si hay valores no convertibles
+
+            resumen_departamentos.append({
+                "departamento": depto,
+                "total_bloqueos": int(len(bloqueos_depto)),
+                "horas_totales_afectacion": float(horas_total) if horas_total is not None else None,
+                "principales_motivos": motivos,
+                "detalle_bloqueos": bloqueos_depto[[ 
+                    "VIA AFECTADA", 
+                    "MOTIVO DE LA MANIFESTACIÓN", 
+                    "TOTAL HORAS DE AFECTACION " 
+                ]].to_dict(orient="records")
+            })
 
     return {
-        "total_bloqueos": len(lista),
-        "lista_bloqueos": lista,
+        "total_bloqueos": int(len(bloqueos)),  
+        "resumen_departamentos": resumen_departamentos,
         "fuente": "Datos proporcionados por Colfecar",
-        "mes_consultado": mes  # útil para saber qué mes devuelve
+        "mes_consultado": int(mes) if mes is not None else None
     }
