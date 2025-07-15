@@ -122,31 +122,22 @@ def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
 # 6. BLOQUEOS DE COLFECAR POR RUTA
 # =======================================
 def obtener_bloqueos_ruta(cod_origen, cod_destino):
-    """
-    Busca TODOS los bloqueos históricos en la ruta definida por cod_origen y cod_destino,
-    totaliza y resume para análisis de riesgo/probabilidad.
-    - Compatible con la salida del SICETACHelper (códigos int).
-    - Cruza en ambos sentidos (ida y vuelta).
-    - Entrega lista de bloqueos, resumen por motivo y un indicador de riesgo histórico.
-    """
     import pandas as pd
 
-    # Cargar archivos
     df_deptos = pd.read_excel("DEPARTAMENTOS EN RUTAS SICE.xlsx")
     df_bloqueos = pd.read_excel("BLOQUEOS EN VIAS COLFECAR.xlsx")
 
-    # Limpiar columnas y asegurar tipos
+    # Normaliza columnas de ambos dataframes
     df_deptos.columns = df_deptos.columns.str.strip()
-    df_bloqueos.columns = df_bloqueos.columns.str.strip()
+    # Normaliza columnas (mayúsculas, sin tildes, sin espacios extras)
+    df_bloqueos.columns = [c.strip().upper().replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U') for c in df_bloqueos.columns]
     df_deptos["codigo_dane_origen"] = df_deptos["codigo_dane_origen"].astype(int)
     df_deptos["codigo_dane_destino"] = df_deptos["codigo_dane_destino"].astype(int)
 
-    # Buscar ruta en ambos sentidos
+    # Busca la ruta en ambos sentidos
     filtro = df_deptos[
-        (
-            ((df_deptos["codigo_dane_origen"] == cod_origen) & (df_deptos["codigo_dane_destino"] == cod_destino))
-            | ((df_deptos["codigo_dane_origen"] == cod_destino) & (df_deptos["codigo_dane_destino"] == cod_origen))
-        )
+        ((df_deptos["codigo_dane_origen"] == cod_origen) & (df_deptos["codigo_dane_destino"] == cod_destino))
+        | ((df_deptos["codigo_dane_origen"] == cod_destino) & (df_deptos["codigo_dane_destino"] == cod_origen))
     ]
 
     if filtro.empty:
@@ -161,7 +152,6 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino):
 
     departamentos = filtro["DEPARTAMENTO SICE"].dropna().unique().tolist()
 
-    # Filtrar bloqueos por TODOS los años/meses para esos departamentos
     bloqueos = df_bloqueos[df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)]
 
     if bloqueos.empty:
@@ -174,35 +164,33 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino):
             "fuente": "Datos proporcionados por Colfecar"
         }
 
-    # Listado detallado de bloqueos
+    # Columnas en mayúscula y sin tildes
     columnas = [
         "DEPARTAMENTO SICE",
         "VIA AFECTADA",
-        "MOTIVO DE LA MANIFESTACIÓN",
-        "TOTAL HORAS DE AFECTACION ",
+        "MOTIVO DE LA MANIFESTACION",
+        "TOTAL HORAS DE AFECTACION",
         "AÑOMES"
     ]
     lista_bloqueos = bloqueos[columnas].rename(columns={
         "DEPARTAMENTO SICE": "departamento_sice",
         "VIA AFECTADA": "via_afectada",
-        "MOTIVO DE LA MANIFESTACIÓN": "motivo_manifestacion",
-        "TOTAL HORAS DE AFECTACION ": "total_horas_afectacion",
+        "MOTIVO DE LA MANIFESTACION": "motivo_manifestacion",
+        "TOTAL HORAS DE AFECTACION": "total_horas_afectacion",
         "AÑOMES": "añomes"
     }).to_dict(orient="records")
 
-    # Resumen por motivo
     resumen = (
-        bloqueos.groupby("MOTIVO DE LA MANIFESTACIÓN")
+        bloqueos.groupby("MOTIVO DE LA MANIFESTACION")
         .agg(
-            total_eventos=pd.NamedAgg(column="MOTIVO DE LA MANIFESTACIÓN", aggfunc="count"),
-            total_horas_afectacion=pd.NamedAgg(column="TOTAL HORAS DE AFECTACION ", aggfunc="sum")
+            total_eventos=pd.NamedAgg(column="MOTIVO DE LA MANIFESTACION", aggfunc="count"),
+            total_horas_afectacion=pd.NamedAgg(column="TOTAL HORAS DE AFECTACION", aggfunc="sum")
         )
         .reset_index()
-        .rename(columns={"MOTIVO DE LA MANIFESTACIÓN": "motivo"})
+        .rename(columns={"MOTIVO DE LA MANIFESTACION": "motivo"})
         .to_dict(orient="records")
     )
 
-    # Indicador de riesgo: porcentaje de meses en los que hubo al menos un bloqueo en la ruta
     total_meses = df_bloqueos["AÑOMES"].nunique()
     meses_con_bloqueo = bloqueos["AÑOMES"].nunique()
     riesgo_bloqueos = meses_con_bloqueo / total_meses if total_meses > 0 else 0
@@ -212,6 +200,6 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino):
         "departamentos_ruta": departamentos,
         "lista_bloqueos": lista_bloqueos,
         "resumen_motivos": resumen,
-        "riesgo_bloqueos": round(riesgo_bloqueos, 2),  # Ej: 0.35 = 35%
+        "riesgo_bloqueos": round(riesgo_bloqueos, 2),
         "fuente": "Datos proporcionados por Colfecar"
-      }
+    }
