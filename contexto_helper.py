@@ -188,7 +188,7 @@ def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEP
     # 5. Lista de bloqueos relevante
     columnas = [
         "ID DEPTO",
-        "DEPARTAMENTO",
+        "DEPARTAMENTO SICE",
         "VIA AFECTADA",
         "MOTIVO DE LA MANIFESTACION",
         "EFECTO TOTAL HORAS",
@@ -196,7 +196,7 @@ def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEP
     ]
     lista_bloqueos = bloqueos[columnas].rename(columns={
         "ID DEPTO": "id_depto",
-        "DEPARTAMENTO": "departamento",
+        "DEPARTAMENTO SICE": "departamento",
         "VIA AFECTADA": "via_afectada",
         "MOTIVO DE LA MANIFESTACION": "motivo_manifestacion",
         "EFECTO TOTAL HORAS": "efecto_total_horas",
