@@ -1,6 +1,20 @@
 import pandas as pd
 import numpy as np
 
+# =========================================
+# 🧹 Función para limpiar NaN en los outputs
+# =========================================
+def limpiar_nan_json(obj):
+    import math
+    if isinstance(obj, dict):
+        return {k: limpiar_nan_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [limpiar_nan_json(v) for v in obj]
+    elif isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    else:
+        return obj
+
 # ================================
 # ✅ Carga única de todas las bases
 # ================================
