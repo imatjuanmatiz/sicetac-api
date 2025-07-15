@@ -130,6 +130,17 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None, debug=False):
         if debug: print("No se encontraron bloqueos para los filtros.")
         return {"total_bloqueos": 0, "lista_bloqueos": [], "fuente": "Datos proporcionados por Colfecar"}
 
+  # **LIMPIEZA CRÍTICA PARA JSON:**
+    def tiempo_a_str(val):
+        import pandas as pd
+        if pd.isnull(val):
+            return ""
+        if hasattr(val, 'strftime'):
+            return val.strftime('%H:%M:%S')
+        return str(val)
+
+    bloqueos["TOTAL HORAS DE AFECTACION "] = bloqueos["TOTAL HORAS DE AFECTACION "].apply(tiempo_a_str)
+
     lista = bloqueos[[
         "DEPARTAMENTO SICE",
         "VIA AFECTADA",
