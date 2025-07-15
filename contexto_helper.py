@@ -117,12 +117,12 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None, debug=False):
         if debug: print("Meses considerados:", ultimos_tres)
 
         bloqueos = df_bloqueos[
-            (df_bloqueos["DEPARTAMENTO"].isin(departamentos)) &
+            (df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)) &
             (df_bloqueos["AÑOMES"].isin(ultimos_tres))
         ]
     else:
         bloqueos = df_bloqueos[
-            (df_bloqueos["DEPARTAMENTO"].isin(departamentos)) &
+            (df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)) &
             (df_bloqueos["AÑOMES"] == mes)
         ]
 
@@ -131,7 +131,7 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None, debug=False):
         return {"total_bloqueos": 0, "lista_bloqueos": [], "fuente": "Datos proporcionados por Colfecar"}
 
     lista = bloqueos[[
-        "DEPARTAMENTO",
+        "DEPARTAMENTO SICE",
         "VIA AFECTADA",
         "MOTIVO DE LA MANIFESTACIÓN",
         "TOTAL HORAS DE AFECTACION "
