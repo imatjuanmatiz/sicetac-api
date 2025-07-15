@@ -121,107 +121,113 @@ def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
 # =======================================
 # 6. BLOQUEOS DE COLFECAR POR RUTA
 # =======================================
-def obtener_bloqueos_ruta(cod_origen, cod_destino):
+
+def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEPTO HELPER.xlsx'):
     """
-    Busca TODOS los bloqueos históricos en la ruta definida por cod_origen y cod_destino,
-    totaliza y resume para análisis de riesgo/probabilidad.
-    Convierte correctamente las horas a número, sin errores de tipos.
+    Analiza bloqueos históricos para una ruta definida por cod_origen y cod_destino, usando ID DEPTO.
+    Usa depto_helper para identificar IDs y EFECTO TOTAL HORAS para análisis.
     """
     import pandas as pd
-    import datetime
+    from depto_helper import DeptoHelper
 
-    # Helper para convertir cualquier formato de horas a número de horas (float)
-    def convertir_a_horas(valor):
-        if isinstance(valor, datetime.time):
-            return valor.hour + valor.minute / 60 + valor.second / 3600
-        try:
-            return float(valor)
-        except Exception:
-            return 0
+    # Inicializa helper una sola vez por función
+    helper = DeptoHelper(depto_helper_file)
 
-    # Cargar archivos
-    df_deptos = pd.read_excel("DEPARTAMENTOS EN RUTAS SICE.xlsx")
-    df_bloqueos = pd.read_excel("BLOQUEOS EN VIAS COLFECAR.xlsx")
+    # Cargar bases
+    df_deptos = pd.read_excel('DEPARTAMENTOS EN RUTAS SICE.xlsx')
+    df_bloqueos = pd.read_excel('BLOQUEOS EN VIAS COLFECAR.xlsx')
 
-    # Normaliza nombres de columnas para evitar problemas de espacios/tildes/mayúsculas
+    # Limpieza y normalización
     df_deptos.columns = df_deptos.columns.str.strip()
-    df_bloqueos.columns = [c.strip().upper().replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U') for c in df_bloqueos.columns]
-    df_deptos["codigo_dane_origen"] = df_deptos["codigo_dane_origen"].astype(int)
-    df_deptos["codigo_dane_destino"] = df_deptos["codigo_dane_destino"].astype(int)
+    df_bloqueos.columns = df_bloqueos.columns.str.strip()
+    df_deptos['codigo_dane_origen'] = df_deptos['codigo_dane_origen'].astype(int)
+    df_deptos['codigo_dane_destino'] = df_deptos['codigo_dane_destino'].astype(int)
+    df_deptos['ID DEPTO'] = df_deptos['ID DEPTO'].astype(int)
+    df_bloqueos['ID DEPTO'] = df_bloqueos['ID DEPTO'].astype(int)
+    df_bloqueos['EFECTO TOTAL HORAS'] = pd.to_numeric(df_bloqueos['EFECTO TOTAL HORAS'], errors='coerce').fillna(0)
 
-    # Busca la ruta en ambos sentidos
+    # 1. Identificar los departamentos por donde pasa la ruta (ambos sentidos)
     filtro = df_deptos[
-        ((df_deptos["codigo_dane_origen"] == cod_origen) & (df_deptos["codigo_dane_destino"] == cod_destino))
-        | ((df_deptos["codigo_dane_origen"] == cod_destino) & (df_deptos["codigo_dane_destino"] == cod_origen))
+        ((df_deptos['codigo_dane_origen'] == cod_origen) & (df_deptos['codigo_dane_destino'] == cod_destino)) |
+        ((df_deptos['codigo_dane_origen'] == cod_destino) & (df_deptos['codigo_dane_destino'] == cod_origen))
     ]
 
     if filtro.empty:
         return {
             "total_bloqueos": 0,
             "departamentos_ruta": [],
+            "id_departamentos_ruta": [],
             "lista_bloqueos": [],
             "resumen_motivos": [],
+            "total_efecto_horas": 0,
             "riesgo_bloqueos": 0,
             "fuente": "Datos proporcionados por Colfecar"
         }
 
-    departamentos = filtro["DEPARTAMENTO SICE"].dropna().unique().tolist()
+    # 2. Extraer todos los ID DEPTO únicos involucrados en la ruta
+    id_deptos_ruta = filtro['ID DEPTO'].dropna().astype(int).unique().tolist()
 
-    bloqueos = df_bloqueos[df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)]
+    # 3. Mapear IDs a nombres oficiales usando helper
+    nombres_departamentos = [helper.buscar_nombre(x) or f"ID {x}" for x in id_deptos_ruta]
+
+    # 4. Filtrar bloqueos para esos departamentos
+    bloqueos = df_bloqueos[df_bloqueos['ID DEPTO'].isin(id_deptos_ruta)]
 
     if bloqueos.empty:
         return {
             "total_bloqueos": 0,
-            "departamentos_ruta": departamentos,
+            "departamentos_ruta": nombres_departamentos,
+            "id_departamentos_ruta": id_deptos_ruta,
             "lista_bloqueos": [],
             "resumen_motivos": [],
+            "total_efecto_horas": 0,
             "riesgo_bloqueos": 0,
             "fuente": "Datos proporcionados por Colfecar"
         }
 
-    # Convertir columna de horas a número si existe
-    if "TOTAL HORAS DE AFECTACION" in bloqueos.columns:
-        bloqueos["TOTAL HORAS DE AFECTACION"] = bloqueos["TOTAL HORAS DE AFECTACION"].apply(convertir_a_horas)
-    else:
-        # Si no existe, crea la columna con ceros para evitar errores
-        bloqueos["TOTAL HORAS DE AFECTACION"] = 0
-
-    # Columnas limpias
+    # 5. Lista de bloqueos relevante
     columnas = [
-        "DEPARTAMENTO SICE",
+        "ID DEPTO",
+        "DEPARTAMENTO",
         "VIA AFECTADA",
         "MOTIVO DE LA MANIFESTACION",
-        "TOTAL HORAS DE AFECTACION",
+        "EFECTO TOTAL HORAS",
         "AÑOMES"
     ]
     lista_bloqueos = bloqueos[columnas].rename(columns={
-        "DEPARTAMENTO SICE": "departamento_sice",
+        "ID DEPTO": "id_depto",
+        "DEPARTAMENTO": "departamento",
         "VIA AFECTADA": "via_afectada",
         "MOTIVO DE LA MANIFESTACION": "motivo_manifestacion",
-        "TOTAL HORAS DE AFECTACION": "total_horas_afectacion",
+        "EFECTO TOTAL HORAS": "efecto_total_horas",
         "AÑOMES": "añomes"
     }).to_dict(orient="records")
 
+    # 6. Resumen por motivo
     resumen = (
         bloqueos.groupby("MOTIVO DE LA MANIFESTACION")
         .agg(
             total_eventos=pd.NamedAgg(column="MOTIVO DE LA MANIFESTACION", aggfunc="count"),
-            total_horas_afectacion=pd.NamedAgg(column="TOTAL HORAS DE AFECTACION", aggfunc="sum")
+            total_efecto_horas=pd.NamedAgg(column="EFECTO TOTAL HORAS", aggfunc="sum")
         )
         .reset_index()
         .rename(columns={"MOTIVO DE LA MANIFESTACION": "motivo"})
         .to_dict(orient="records")
     )
 
+    # 7. Suma total de horas efecto y riesgo (frecuencia histórica de bloqueo)
+    total_efecto_horas = bloqueos["EFECTO TOTAL HORAS"].sum()
     total_meses = df_bloqueos["AÑOMES"].nunique()
     meses_con_bloqueo = bloqueos["AÑOMES"].nunique()
     riesgo_bloqueos = meses_con_bloqueo / total_meses if total_meses > 0 else 0
 
     return {
         "total_bloqueos": len(lista_bloqueos),
-        "departamentos_ruta": departamentos,
+        "departamentos_ruta": nombres_departamentos,
+        "id_departamentos_ruta": id_deptos_ruta,
         "lista_bloqueos": lista_bloqueos,
         "resumen_motivos": resumen,
+        "total_efecto_horas": float(total_efecto_horas),
         "riesgo_bloqueos": round(riesgo_bloqueos, 2),
         "fuente": "Datos proporcionados por Colfecar"
     }
