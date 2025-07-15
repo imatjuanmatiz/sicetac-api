@@ -121,11 +121,11 @@ def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
 # =======================================
 # 6. BLOQUEOS DE COLFECAR POR RUTA
 # =======================================
-def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
+def obtener_bloqueos_ruta(cod_origen, cod_destino):
     """
     Devuelve bloqueos de Colfecar para los departamentos por donde pasa la ruta.
     Incluye la columna 'VIA AFECTADA'.
-    Por defecto toma el penúltimo mes disponible, a menos que se indique otro mes.
+    Analiza SIEMPRE todos los bloqueos del año (sin filtro de mes).
     """
     import pandas as pd
 
@@ -133,7 +133,7 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
     df_deptos = pd.read_excel("DEPARTAMENTOS EN RUTAS SICE.xlsx")
     df_bloqueos = pd.read_excel("BLOQUEOS EN VIAS COLFECAR.xlsx")
 
-    # Asegura que AÑOMES sea int
+    # Asegura que AÑOMES sea int (si lo necesitas para otros cálculos)
     df_bloqueos["AÑOMES"] = df_bloqueos["AÑOMES"].astype(int)
 
     # Filtrar departamentos según la ruta
@@ -150,26 +150,16 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
 
     departamentos = filtro["DEPARTAMENTO SICE"].dropna().unique().tolist()
 
-    # Determinar el mes: el penúltimo si mes no se indica
-    if mes is None:
-        meses_ordenados = sorted(df_bloqueos["AÑOMES"].dropna().unique())
-        if len(meses_ordenados) >= 2:
-            mes = meses_ordenados[-2]  # penúltimo
-        else:
-            mes = meses_ordenados[-1]  # si solo hay uno, usa ese
-
-    # Filtrar bloqueos por departamentos y mes
+    # 🚩 YA NO SE FILTRA POR MES: Solo por departamentos
     bloqueos = df_bloqueos[
-        (df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)) &
-        (df_bloqueos["AÑOMES"] == mes)
+        (df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos))
     ]
-    
+
     if bloqueos.empty:
         return {
             "total_bloqueos": 0,
             "resumen_departamentos": [],
-            "fuente": "Datos proporcionados por Colfecar",
-            "mes_consultado": int(mes) if mes is not None else None
+            "fuente": "Datos proporcionados por Colfecar"
         }
 
     # Agrupa por departamento y arma el resumen
@@ -200,7 +190,6 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
     return {
         "total_bloqueos": int(len(bloqueos)),  
         "resumen_departamentos": resumen_departamentos,
-        "fuente": "Datos proporcionados por Colfecar",
-        "mes_consultado": int(mes) if mes is not None else None
+        "fuente": "Datos proporcionados por Colfecar"
     }
 
