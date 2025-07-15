@@ -9,7 +9,8 @@ from contexto_helper import (
     obtener_indicadores,
     evaluar_competitividad,
     obtener_meses_disponibles_mercado,
-    obtener_meses_disponibles_indicador
+    obtener_meses_disponibles_indicador,
+    obtener_bloqueos_ruta
 )
 
 app = FastAPI(title="API SICETAC", version="1.4")
@@ -149,3 +150,11 @@ def calcular_sicetac(data: ConsultaInput):
     }
 
     return JSONResponse(content=respuesta)
+
+@app.get("/consulta_bloqueos")
+def consulta_bloqueos(origen_dane: int, destino_dane: int, mes: int = None):
+    """
+    Endpoint de prueba para obtener bloqueos en una ruta según origen y destino.
+    """
+    resultado = obtener_bloqueos_ruta(origen_dane, destino_dane, mes)
+    return resultado
