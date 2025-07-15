@@ -126,34 +126,54 @@ def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEP
     """
     Analiza bloqueos históricos para una ruta definida por cod_origen y cod_destino, usando ID DEPTO.
     Usa depto_helper para identificar IDs y EFECTO TOTAL HORAS para análisis.
+    Limpia columnas y asegura que no haya NaN en la respuesta JSON.
     """
     import pandas as pd
+    import math
+    import unicodedata
     from depto_helper import DeptoHelper
 
-    # Inicializa helper una sola vez por función
+    # ---- Función para limpiar columnas (mayúsculas, sin tildes, sin espacios extras) ----
+    def limpiar_columna(col):
+        col = col.strip().upper()
+        col = ''.join((c for c in unicodedata.normalize('NFD', col) if unicodedata.category(c) != 'Mn'))
+        return col
+
+    # ---- Función para limpiar NaN e infinitos de la salida ----
+    def limpiar_nan_json(obj):
+        if isinstance(obj, dict):
+            return {k: limpiar_nan_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [limpiar_nan_json(v) for v in obj]
+        elif isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
+        else:
+            return obj
+
+    # ---- Inicializa helper y carga bases ----
     helper = DeptoHelper(depto_helper_file)
 
-    # Cargar bases
     df_deptos = pd.read_excel('DEPARTAMENTOS EN RUTAS SICE.xlsx')
     df_bloqueos = pd.read_excel('BLOQUEOS EN VIAS COLFECAR.xlsx')
 
-    # Limpieza y normalización
-    df_deptos.columns = df_deptos.columns.str.strip()
-    df_bloqueos.columns = df_bloqueos.columns.str.strip()
-    df_deptos['codigo_dane_origen'] = df_deptos['codigo_dane_origen'].astype(int)
-    df_deptos['codigo_dane_destino'] = df_deptos['codigo_dane_destino'].astype(int)
+    df_deptos.columns = [limpiar_columna(c) for c in df_deptos.columns]
+    df_bloqueos.columns = [limpiar_columna(c) for c in df_bloqueos.columns]
+    df_deptos['CODIGO_DANE_ORIGEN'] = df_deptos['CODIGO_DANE_ORIGEN'].astype(int)
+    df_deptos['CODIGO_DANE_DESTINO'] = df_deptos['CODIGO_DANE_DESTINO'].astype(int)
     df_deptos['ID DEPTO'] = df_deptos['ID DEPTO'].astype(int)
     df_bloqueos['ID DEPTO'] = df_bloqueos['ID DEPTO'].astype(int)
     df_bloqueos['EFECTO TOTAL HORAS'] = pd.to_numeric(df_bloqueos['EFECTO TOTAL HORAS'], errors='coerce').fillna(0)
 
-    # 1. Identificar los departamentos por donde pasa la ruta (ambos sentidos)
+    # ---- 1. Identificar los departamentos por donde pasa la ruta (ambos sentidos) ----
     filtro = df_deptos[
-        ((df_deptos['codigo_dane_origen'] == cod_origen) & (df_deptos['codigo_dane_destino'] == cod_destino)) |
-        ((df_deptos['codigo_dane_origen'] == cod_destino) & (df_deptos['codigo_dane_destino'] == cod_origen))
+        ((df_deptos['CODIGO_DANE_ORIGEN'] == cod_origen) & (df_deptos['CODIGO_DANE_DESTINO'] == cod_destino)) |
+        ((df_deptos['CODIGO_DANE_ORIGEN'] == cod_destino) & (df_deptos['CODIGO_DANE_DESTINO'] == cod_origen))
     ]
 
     if filtro.empty:
-        return {
+        resultado = {
             "total_bloqueos": 0,
             "departamentos_ruta": [],
             "id_departamentos_ruta": [],
@@ -163,18 +183,19 @@ def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEP
             "riesgo_bloqueos": 0,
             "fuente": "Datos proporcionados por Colfecar"
         }
+        return limpiar_nan_json(resultado)
 
-    # 2. Extraer todos los ID DEPTO únicos involucrados en la ruta
+    # ---- 2. Extraer todos los ID DEPTO únicos involucrados en la ruta ----
     id_deptos_ruta = filtro['ID DEPTO'].dropna().astype(int).unique().tolist()
 
-    # 3. Mapear IDs a nombres oficiales usando helper
+    # ---- 3. Mapear IDs a nombres oficiales usando helper ----
     nombres_departamentos = [helper.buscar_nombre(x) or f"ID {x}" for x in id_deptos_ruta]
 
-    # 4. Filtrar bloqueos para esos departamentos
+    # ---- 4. Filtrar bloqueos para esos departamentos ----
     bloqueos = df_bloqueos[df_bloqueos['ID DEPTO'].isin(id_deptos_ruta)]
 
     if bloqueos.empty:
-        return {
+        resultado = {
             "total_bloqueos": 0,
             "departamentos_ruta": nombres_departamentos,
             "id_departamentos_ruta": id_deptos_ruta,
@@ -184,44 +205,48 @@ def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEP
             "riesgo_bloqueos": 0,
             "fuente": "Datos proporcionados por Colfecar"
         }
+        return limpiar_nan_json(resultado)
 
-    # 5. Lista de bloqueos relevante
+    # ---- 5. Lista de bloqueos relevante ----
     columnas = [
         "ID DEPTO",
-        "DEPARTAMENTO SICE",
+        "DEPARTAMENTO",
         "VIA AFECTADA",
         "MOTIVO DE LA MANIFESTACION",
         "EFECTO TOTAL HORAS",
         "AÑOMES"
     ]
-    lista_bloqueos = bloqueos[columnas].rename(columns={
+    # Solo deja las columnas que existan
+    columnas_existentes = [c for c in columnas if c in bloqueos.columns]
+    lista_bloqueos = bloqueos[columnas_existentes].rename(columns={
         "ID DEPTO": "id_depto",
-        "DEPARTAMENTO SICE": "departamento",
+        "DEPARTAMENTO": "departamento",
         "VIA AFECTADA": "via_afectada",
         "MOTIVO DE LA MANIFESTACION": "motivo_manifestacion",
         "EFECTO TOTAL HORAS": "efecto_total_horas",
         "AÑOMES": "añomes"
     }).to_dict(orient="records")
 
-    # 6. Resumen por motivo
+    # ---- 6. Resumen por motivo ----
+    motivo_col = "MOTIVO DE LA MANIFESTACION" if "MOTIVO DE LA MANIFESTACION" in bloqueos.columns else bloqueos.columns[0]  # fallback
     resumen = (
-        bloqueos.groupby("MOTIVO DE LA MANIFESTACION")
+        bloqueos.groupby(motivo_col)
         .agg(
-            total_eventos=pd.NamedAgg(column="MOTIVO DE LA MANIFESTACION", aggfunc="count"),
+            total_eventos=pd.NamedAgg(column=motivo_col, aggfunc="count"),
             total_efecto_horas=pd.NamedAgg(column="EFECTO TOTAL HORAS", aggfunc="sum")
         )
         .reset_index()
-        .rename(columns={"MOTIVO DE LA MANIFESTACION": "motivo"})
+        .rename(columns={motivo_col: "motivo"})
         .to_dict(orient="records")
     )
 
-    # 7. Suma total de horas efecto y riesgo (frecuencia histórica de bloqueo)
+    # ---- 7. Suma total de horas efecto y riesgo (frecuencia histórica de bloqueo) ----
     total_efecto_horas = bloqueos["EFECTO TOTAL HORAS"].sum()
-    total_meses = df_bloqueos["AÑOMES"].nunique()
-    meses_con_bloqueo = bloqueos["AÑOMES"].nunique()
+    total_meses = df_bloqueos["AÑOMES"].nunique() if "AÑOMES" in df_bloqueos.columns else 1
+    meses_con_bloqueo = bloqueos["AÑOMES"].nunique() if "AÑOMES" in bloqueos.columns else 1
     riesgo_bloqueos = meses_con_bloqueo / total_meses if total_meses > 0 else 0
 
-    return {
+    resultado = {
         "total_bloqueos": len(lista_bloqueos),
         "departamentos_ruta": nombres_departamentos,
         "id_departamentos_ruta": id_deptos_ruta,
@@ -231,3 +256,4 @@ def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEP
         "riesgo_bloqueos": round(riesgo_bloqueos, 2),
         "fuente": "Datos proporcionados por Colfecar"
     }
+    return limpiar_nan_json(resultado)
