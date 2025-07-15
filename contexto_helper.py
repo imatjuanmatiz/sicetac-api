@@ -144,7 +144,7 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
     if filtro.empty:
         return {
             "total_bloqueos": 0,
-            "lista_bloqueos": [],
+            "resumen_departamentos": [],
             "fuente": "Datos proporcionados por Colfecar"
         }
 
@@ -163,7 +163,8 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
         (df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)) &
         (df_bloqueos["AÑOMES"] == mes)
     ]
-if bloqueos.empty:
+    
+    if bloqueos.empty:
         return {
             "total_bloqueos": 0,
             "resumen_departamentos": [],
@@ -202,3 +203,4 @@ if bloqueos.empty:
         "fuente": "Datos proporcionados por Colfecar",
         "mes_consultado": int(mes) if mes is not None else None
     }
+
