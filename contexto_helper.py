@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 # ================================
 # ✅ Carga única de todas las bases
@@ -93,29 +94,36 @@ def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
 # 6. BLOQUEOS DE COLFECAR POR RUTA
 # =======================================
 def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None, debug=False):
+    """
+    Devuelve bloqueos de Colfecar para los departamentos por donde pasa la ruta.
+    Cruza usando la columna 'DEPARTAMENTO SICE' de ambas bases.
+    Por defecto, si no se especifica mes, trae los bloqueos de los últimos 3 meses disponibles.
+    """
+
     df_deptos = pd.read_excel("DEPARTAMENTOS EN RUTAS SICE.xlsx")
     df_bloqueos = pd.read_excel("BLOQUEOS EN VIAS COLFECAR.xlsx")
 
-    # Buscar departamentos asociados
+    # Buscar departamentos en la base de rutas
     filtro = df_deptos[
         (df_deptos["codigo_dane_origen"] == cod_origen) &
         (df_deptos["codigo_dane_destino"] == cod_destino)
     ]
     if filtro.empty:
-        return {"total_bloqueos": 0, "lista_bloqueos": [], "fuente": "Datos proporcionados por Colfecar"}
+        if debug: print("⚠️ No se encontraron departamentos asociados a esta ruta.")
+        return {
+            "total_bloqueos": 0,
+            "lista_bloqueos": [],
+            "fuente": "Datos proporcionados por Colfecar"
+        }
 
     departamentos = filtro["DEPARTAMENTO SICE"].dropna().unique().tolist()
-    if debug: print("Departamentos para la ruta:", departamentos)
+    if debug: print("🔎 Departamentos para la ruta:", departamentos)
 
-    # 🔥 Si el usuario no da mes, usamos la lógica histórica
+    # Selección de meses (últimos 3 si mes=None)
     if mes is None:
-        # Ordenar los meses disponibles de más reciente a más antiguo
         meses_disponibles = sorted(df_bloqueos["AÑOMES"].dropna().unique(), reverse=True)
-
-        # 👉 Tomar no solo el máximo, sino los últimos 3 meses
         ultimos_tres = meses_disponibles[:3]
-        if debug: print("Meses considerados:", ultimos_tres)
-
+        if debug: print("📅 Meses considerados:", ultimos_tres)
         bloqueos = df_bloqueos[
             (df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)) &
             (df_bloqueos["AÑOMES"].isin(ultimos_tres))
@@ -127,18 +135,20 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None, debug=False):
         ]
 
     if bloqueos.empty:
-        if debug: print("No se encontraron bloqueos para los filtros.")
-        return {"total_bloqueos": 0, "lista_bloqueos": [], "fuente": "Datos proporcionados por Colfecar"}
+        if debug: print("⚠️ No se encontraron bloqueos para los filtros aplicados.")
+        return {
+            "total_bloqueos": 0,
+            "lista_bloqueos": [],
+            "fuente": "Datos proporcionados por Colfecar"
+        }
 
-  # **LIMPIEZA CRÍTICA PARA JSON:**
+    # Limpieza para JSON del campo de horas
     def tiempo_a_str(val):
-        import pandas as pd
         if pd.isnull(val):
             return ""
-        if hasattr(val, 'strftime'):
-            return val.strftime('%H:%M:%S')
         return str(val)
 
+    bloqueos = bloqueos.copy()
     bloqueos["TOTAL HORAS DE AFECTACION "] = bloqueos["TOTAL HORAS DE AFECTACION "].apply(tiempo_a_str)
 
     lista = bloqueos[[
