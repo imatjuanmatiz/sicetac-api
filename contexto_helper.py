@@ -123,73 +123,95 @@ def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
 # =======================================
 def obtener_bloqueos_ruta(cod_origen, cod_destino):
     """
-    Devuelve bloqueos de Colfecar para los departamentos por donde pasa la ruta.
-    Incluye la columna 'VIA AFECTADA'.
-    Analiza SIEMPRE todos los bloqueos del año (sin filtro de mes).
+    Busca TODOS los bloqueos históricos en la ruta definida por cod_origen y cod_destino,
+    totaliza y resume para análisis de riesgo/probabilidad.
+    - Compatible con la salida del SICETACHelper (códigos int).
+    - Cruza en ambos sentidos (ida y vuelta).
+    - Entrega lista de bloqueos, resumen por motivo y un indicador de riesgo histórico.
     """
     import pandas as pd
 
-    # Cargar bases
+    # Cargar archivos
     df_deptos = pd.read_excel("DEPARTAMENTOS EN RUTAS SICE.xlsx")
     df_bloqueos = pd.read_excel("BLOQUEOS EN VIAS COLFECAR.xlsx")
 
-    # Asegura que AÑOMES sea int (si lo necesitas para otros cálculos)
-    df_bloqueos["AÑOMES"] = df_bloqueos["AÑOMES"].astype(int)
+    # Limpiar columnas y asegurar tipos
+    df_deptos.columns = df_deptos.columns.str.strip()
+    df_bloqueos.columns = df_bloqueos.columns.str.strip()
+    df_deptos["codigo_dane_origen"] = df_deptos["codigo_dane_origen"].astype(int)
+    df_deptos["codigo_dane_destino"] = df_deptos["codigo_dane_destino"].astype(int)
 
-    # Filtrar departamentos según la ruta
+    # Buscar ruta en ambos sentidos
     filtro = df_deptos[
-        (df_deptos["codigo_dane_origen"] == cod_origen) &
-        (df_deptos["codigo_dane_destino"] == cod_destino)
+        (
+            ((df_deptos["codigo_dane_origen"] == cod_origen) & (df_deptos["codigo_dane_destino"] == cod_destino))
+            | ((df_deptos["codigo_dane_origen"] == cod_destino) & (df_deptos["codigo_dane_destino"] == cod_origen))
+        )
     ]
+
     if filtro.empty:
         return {
             "total_bloqueos": 0,
-            "resumen_departamentos": [],
+            "departamentos_ruta": [],
+            "lista_bloqueos": [],
+            "resumen_motivos": [],
+            "riesgo_bloqueos": 0,
             "fuente": "Datos proporcionados por Colfecar"
         }
 
     departamentos = filtro["DEPARTAMENTO SICE"].dropna().unique().tolist()
 
-    # 🚩 YA NO SE FILTRA POR MES: Solo por departamentos
-    bloqueos = df_bloqueos[
-        (df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos))
-    ]
+    # Filtrar bloqueos por TODOS los años/meses para esos departamentos
+    bloqueos = df_bloqueos[df_bloqueos["DEPARTAMENTO SICE"].isin(departamentos)]
 
     if bloqueos.empty:
         return {
             "total_bloqueos": 0,
-            "resumen_departamentos": [],
+            "departamentos_ruta": departamentos,
+            "lista_bloqueos": [],
+            "resumen_motivos": [],
+            "riesgo_bloqueos": 0,
             "fuente": "Datos proporcionados por Colfecar"
         }
 
-    # Agrupa por departamento y arma el resumen
-    resumen_departamentos = []
-    for depto in departamentos:
-        bloqueos_depto = bloqueos[bloqueos["DEPARTAMENTO SICE"] == depto]
-        if not bloqueos_depto.empty:
-            # Principales motivos (puedes poner los 2 más frecuentes si quieres)
-            motivos = bloqueos_depto["MOTIVO DE LA MANIFESTACIÓN"].value_counts().index.tolist()
-            # Horas totales de afectación (puede requerir limpieza de datos si son texto)
-            try:
-                horas_total = bloqueos_depto["TOTAL HORAS DE AFECTACION "].astype(float).sum()
-            except Exception:
-                horas_total = None  # por si hay valores no convertibles
+    # Listado detallado de bloqueos
+    columnas = [
+        "DEPARTAMENTO SICE",
+        "VIA AFECTADA",
+        "MOTIVO DE LA MANIFESTACIÓN",
+        "TOTAL HORAS DE AFECTACION ",
+        "AÑOMES"
+    ]
+    lista_bloqueos = bloqueos[columnas].rename(columns={
+        "DEPARTAMENTO SICE": "departamento_sice",
+        "VIA AFECTADA": "via_afectada",
+        "MOTIVO DE LA MANIFESTACIÓN": "motivo_manifestacion",
+        "TOTAL HORAS DE AFECTACION ": "total_horas_afectacion",
+        "AÑOMES": "añomes"
+    }).to_dict(orient="records")
 
-            resumen_departamentos.append({
-                "departamento": depto,
-                "total_bloqueos": int(len(bloqueos_depto)),
-                "horas_totales_afectacion": float(horas_total) if horas_total is not None else None,
-                "principales_motivos": motivos,
-                "detalle_bloqueos": bloqueos_depto[[ 
-                    "VIA AFECTADA", 
-                    "MOTIVO DE LA MANIFESTACIÓN", 
-                    "TOTAL HORAS DE AFECTACION " 
-                ]].to_dict(orient="records")
-            })
+    # Resumen por motivo
+    resumen = (
+        bloqueos.groupby("MOTIVO DE LA MANIFESTACIÓN")
+        .agg(
+            total_eventos=pd.NamedAgg(column="MOTIVO DE LA MANIFESTACIÓN", aggfunc="count"),
+            total_horas_afectacion=pd.NamedAgg(column="TOTAL HORAS DE AFECTACION ", aggfunc="sum")
+        )
+        .reset_index()
+        .rename(columns={"MOTIVO DE LA MANIFESTACIÓN": "motivo"})
+        .to_dict(orient="records")
+    )
+
+    # Indicador de riesgo: porcentaje de meses en los que hubo al menos un bloqueo en la ruta
+    total_meses = df_bloqueos["AÑOMES"].nunique()
+    meses_con_bloqueo = bloqueos["AÑOMES"].nunique()
+    riesgo_bloqueos = meses_con_bloqueo / total_meses if total_meses > 0 else 0
 
     return {
-        "total_bloqueos": int(len(bloqueos)),  
-        "resumen_departamentos": resumen_departamentos,
+        "total_bloqueos": len(lista_bloqueos),
+        "departamentos_ruta": departamentos,
+        "lista_bloqueos": lista_bloqueos,
+        "resumen_motivos": resumen,
+        "riesgo_bloqueos": round(riesgo_bloqueos, 2),  # Ej: 0.35 = 35%
         "fuente": "Datos proporcionados por Colfecar"
-    }
-
+      }
