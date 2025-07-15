@@ -28,16 +28,30 @@ df_competitividad = pd.read_excel("competitividad_rutas_2025.xlsx")
 # =======================================
 def obtener_valores_promedio_mercado(origen, destino, configuracion):
     config = configuracion.upper()
-    df_filtrado = df_valores[
+    df_valores["CONFIGURACION_ANALISIS"] = df_valores["CONFIGURACION_ANALISIS"].astype(str)
+    filtro = (
         (df_valores["CODIGO_ORIGEN"] == int(origen)) &
         (df_valores["CODIGO_DESTINO"] == int(destino)) &
         (df_valores["CONFIGURACION_ANALISIS"].str.upper() == config)
-    ]
-    if df_filtrado.empty:
-        return None
-    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
-    return df_resultado.to_dict(orient="records")
+    )
+    df_filtrado = df_valores[filtro]
 
+    # Lista de todos los meses disponibles (puede que no tengan valor promedio)
+    meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
+    
+    if df_filtrado.empty:
+        return {
+            "valores_mes": [],
+            "meses_disponibles": meses_disponibles
+        }
+    # Solo los meses donde sí hay valor promedio registrado (no NaN)
+    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
+    valores_mes = df_resultado.to_dict(orient="records")
+    
+    return {
+        "valores_mes": valores_mes,
+        "meses_disponibles": meses_disponibles
+    }
 
 # =======================================
 # 2. INDICADORES OPERATIVOS
@@ -114,9 +128,13 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
     Por defecto toma el penúltimo mes disponible, a menos que se indique otro mes.
     """
     import pandas as pd
+
     # Cargar bases
     df_deptos = pd.read_excel("DEPARTAMENTOS EN RUTAS SICE.xlsx")
     df_bloqueos = pd.read_excel("BLOQUEOS EN VIAS COLFECAR.xlsx")
+
+    # Asegura que AÑOMES sea int
+    df_bloqueos["AÑOMES"] = df_bloqueos["AÑOMES"].astype(int)
 
     # Filtrar departamentos según la ruta
     filtro = df_deptos[
@@ -153,7 +171,7 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
             "fuente": "Datos proporcionados por Colfecar"
         }
 
-    # Seleccionar columnas relevantes
+    # Seleccionar columnas relevantes (ajusta nombres según tu base)
     lista = bloqueos[[ 
         "DEPARTAMENTO SICE", 
         "VIA AFECTADA", 
@@ -164,5 +182,6 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
     return {
         "total_bloqueos": len(lista),
         "lista_bloqueos": lista,
-        "fuente": "Datos proporcionados por Colfecar"
+        "fuente": "Datos proporcionados por Colfecar",
+        "mes_consultado": mes  # útil para saber qué mes devuelve
     }
