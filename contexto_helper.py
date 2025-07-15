@@ -94,14 +94,14 @@ def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
 # =======================================
 def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
     """
-    Devuelve bloqueos de Colfecar para los departamentos por donde pasa la ruta.
+     Devuelve bloqueos de Colfecar para los departamentos por donde pasa la ruta.
     Incluye la columna 'VIA AFECTADA'.
-    Por defecto toma el último mes disponible, a menos que se indique otro mes.
+    ✅ Si mes es None, intenta con el último mes; si no hay datos, trae últimos 3 meses.
     """
-    # Cargar bases específicas
     df_deptos = pd.read_excel("DEPARTAMENTOS EN RUTAS SICE.xlsx")
     df_bloqueos = pd.read_excel("BLOQUEOS EN VIAS COLFECAR.xlsx")
 
+    # Departamentos asociados a la ruta
     filtro = df_deptos[
         (df_deptos["codigo_dane_origen"] == cod_origen) &
         (df_deptos["codigo_dane_destino"] == cod_destino)
@@ -115,14 +115,31 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino, mes=None):
 
     departamentos = filtro["DEPARTAMENTO SICE"].dropna().unique().tolist()
 
+    # Si no se especifica mes: probar con último mes
     if mes is None:
-        mes = df_bloqueos["AÑOMES"].max()
+        ultimo_mes = df_bloqueos["AÑOMES"].max()
+        bloqueos = df_bloqueos[
+            (df_bloqueos["DEPARTAMENTO"].isin(departamentos)) &
+            (df_bloqueos["AÑOMES"] == ultimo_mes)
+        ]
 
-    bloqueos = df_bloqueos[
-        (df_bloqueos["DEPARTAMENTO"].isin(departamentos)) &
-        (df_bloqueos["AÑOMES"] == mes)
-    ]
+        # Si está vacío, tomar últimos tres meses
+        if bloqueos.empty:
+            # Obtener los 3 meses más recientes ordenados
+            meses_disponibles = sorted(df_bloqueos["AÑOMES"].dropna().unique(), reverse=True)
+            ultimos_tres = meses_disponibles[:3]
+            bloqueos = df_bloqueos[
+                (df_bloqueos["DEPARTAMENTO"].isin(departamentos)) &
+                (df_bloqueos["AÑOMES"].isin(ultimos_tres))
+            ]
+    else:
+        # Si mes específico fue dado
+        bloqueos = df_bloqueos[
+            (df_bloqueos["DEPARTAMENTO"].isin(departamentos)) &
+            (df_bloqueos["AÑOMES"] == mes)
+        ]
 
+    # Procesar resultados
     if bloqueos.empty:
         return {
             "total_bloqueos": 0,
