@@ -122,14 +122,29 @@ def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
 # 6. BLOQUEOS DE COLFECAR POR RUTA
 # =======================================
 def obtener_bloqueos_ruta(cod_origen, cod_destino):
+    """
+    Busca TODOS los bloqueos históricos en la ruta definida por cod_origen y cod_destino,
+    totaliza y resume para análisis de riesgo/probabilidad.
+    Convierte correctamente las horas a número, sin errores de tipos.
+    """
     import pandas as pd
+    import datetime
 
+    # Helper para convertir cualquier formato de horas a número de horas (float)
+    def convertir_a_horas(valor):
+        if isinstance(valor, datetime.time):
+            return valor.hour + valor.minute / 60 + valor.second / 3600
+        try:
+            return float(valor)
+        except Exception:
+            return 0
+
+    # Cargar archivos
     df_deptos = pd.read_excel("DEPARTAMENTOS EN RUTAS SICE.xlsx")
     df_bloqueos = pd.read_excel("BLOQUEOS EN VIAS COLFECAR.xlsx")
 
-    # Normaliza columnas de ambos dataframes
+    # Normaliza nombres de columnas para evitar problemas de espacios/tildes/mayúsculas
     df_deptos.columns = df_deptos.columns.str.strip()
-    # Normaliza columnas (mayúsculas, sin tildes, sin espacios extras)
     df_bloqueos.columns = [c.strip().upper().replace('Á', 'A').replace('É', 'E').replace('Í', 'I').replace('Ó', 'O').replace('Ú', 'U') for c in df_bloqueos.columns]
     df_deptos["codigo_dane_origen"] = df_deptos["codigo_dane_origen"].astype(int)
     df_deptos["codigo_dane_destino"] = df_deptos["codigo_dane_destino"].astype(int)
@@ -164,7 +179,14 @@ def obtener_bloqueos_ruta(cod_origen, cod_destino):
             "fuente": "Datos proporcionados por Colfecar"
         }
 
-    # Columnas en mayúscula y sin tildes
+    # Convertir columna de horas a número si existe
+    if "TOTAL HORAS DE AFECTACION" in bloqueos.columns:
+        bloqueos["TOTAL HORAS DE AFECTACION"] = bloqueos["TOTAL HORAS DE AFECTACION"].apply(convertir_a_horas)
+    else:
+        # Si no existe, crea la columna con ceros para evitar errores
+        bloqueos["TOTAL HORAS DE AFECTACION"] = 0
+
+    # Columnas limpias
     columnas = [
         "DEPARTAMENTO SICE",
         "VIA AFECTADA",
