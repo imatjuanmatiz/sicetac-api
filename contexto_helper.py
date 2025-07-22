@@ -81,6 +81,36 @@ def obtener_valores_promedio_mercado(origen, destino, configuracion):
         "meses_disponibles": meses_disponibles
     }
 
+def obtener_valores_promedio_mercado_por_llave(ruta_config):
+    # Normaliza la llave a mayúsculas y sin espacios
+    ruta_config = str(ruta_config).strip().upper()
+    print(f"Buscando ruta directa: {ruta_config}")
+
+    df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper().str.strip()
+    filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_config)
+    df_filtrado = df_valores[filtro]
+
+    print(f"Filas encontradas con llave directa: {len(df_filtrado)}")
+
+    if df_filtrado.empty:
+        # Si no hay resultados, devolvemos vacío
+        return {
+            "valores_mes": [],
+            "meses_disponibles": []
+        }
+
+    # Conversión robusta a numérico
+    df_filtrado["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(df_filtrado["VALOR_PROMEDIO_MERCADO"], errors="coerce")
+    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
+    valores_mes = df_resultado.to_dict(orient="records")
+    meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
+
+    return {
+        "valores_mes": valores_mes,
+        "meses_disponibles": meses_disponibles
+    }
+
+
 # =======================================
 # 2. INDICADORES OPERATIVOS
 # =======================================
@@ -118,27 +148,6 @@ def evaluar_competitividad(origen, destino, configuracion):
     if fila.empty:
         return None
     return fila.iloc[0].to_dict()
-
-# =======================================
-# 4. MESES DISPONIBLES PARA MERCADO
-# =======================================
-def obtener_meses_disponibles_mercado(cod_origen, cod_destino, config):
-    config = traducir_config(config)
-    origen_str = str(int(cod_origen))
-    destino_str = str(int(cod_destino))
-    ruta_esperada = f"{origen_str}-{destino_str}-{config}"
-    print(f"Buscando meses para ruta: {ruta_esperada}")
-    df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper()
-    filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_esperada.upper())
-    meses = df_valores.loc[filtro, "MES"].dropna().unique()
-    if len(meses) == 0:
-        # Prueba invertida
-        ruta_invertida = f"{destino_str}-{origen_str}-{config}"
-        filtro_invertido = (df_valores["RUTA_CONFIGURACION"] == ruta_invertida.upper())
-        meses = df_valores.loc[filtro_invertido, "MES"].dropna().unique()
-        if len(meses) == 0:
-            return []
-    return sorted([int(m) for m in meses])
 
 # =======================================
 # 5. MESES DISPONIBLES PARA INDICADORES
