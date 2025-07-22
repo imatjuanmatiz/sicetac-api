@@ -144,7 +144,9 @@ def calcular_sicetac(data: ConsultaInput):
             ruta_config = f"{cod_origen}-{cod_destino}-{data.vehiculo.strip().upper().replace('C', '')}"
             historico_mercado = obtener_valores_promedio_mercado_por_llave(ruta_config)
         except Exception as e:
+            print("❌ ERROR al obtener historico_mercado:", e)
             historico_mercado = None
+                     
             print("DEBUG historico_mercado:", historico_mercado)
         try:
             indicadores_origen = obtener_indicadores(cod_origen, vehiculo_upper)
