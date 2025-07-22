@@ -9,7 +9,7 @@ from modelo_sicetac import calcular_modelo_sicetac_extendido
 from contexto_helper import (
     obtener_valores_promedio_mercado_por_llave,
     obtener_indicadores,
-    evaluar_competitividad,,
+    evaluar_competitividad,
     obtener_meses_disponibles_indicador,
     obtener_bloqueos_ruta_por_id
 )
