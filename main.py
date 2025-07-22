@@ -176,7 +176,7 @@ def calcular_sicetac(data: ConsultaInput):
         # 🔥 Aquí el cambio: historico_mercado["valores_mes"] para el campo de la API
         respuesta = {
             "SICETAC": resultado_convertido,
-            "HISTORICO_VALOR_MERCADO": historico_mercado["valores_mes"] if historico_mercado else [],
+            "HISTORICO_VALOR_MERCADO": historico_mercado if historico_mercado else [],
             "INDICADORES_ORIGEN": indicadores_origen,
             "INDICADORES_DESTINO": indicadores_destino,
             "COMPETITIVIDAD": competitividad,
