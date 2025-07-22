@@ -82,6 +82,13 @@ def obtener_valores_promedio_mercado(origen, destino, configuracion):
         "meses_disponibles": meses_disponibles
     }
 
+print("------ DEBUG FULL ------")
+print("Filtro esperado:", ruta_esperada.upper())
+print(df_valores[["RUTA_CONFIGURACION", "MES", "VALOR_PROMEDIO_MERCADO"]].head(20))
+print("Filtrado:")
+print(df_filtrado)
+print("------------------------")
+
 # =======================================
 # 2. INDICADORES OPERATIVOS
 # =======================================
