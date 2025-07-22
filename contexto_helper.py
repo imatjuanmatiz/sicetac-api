@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import math
 import unicodedata
-from depto_helper import DeptoHelper  # Asumiendo que existe, como en el original
+from depto_helper import DeptoHelper  # Si usas este helper en bloqueos
 
 # =========================================
 # 🧹 Función para limpiar NaN en los outputs
@@ -30,61 +30,63 @@ df_config['TIPO_VEHICULO'] = df_config['TIPO_VEHICULO'].astype(str).str.strip().
 df_config['CONFIGURACION_ANALISIS'] = df_config['CONFIGURACION_ANALISIS'].astype(str).str.strip().str.upper()
 mapeo_config = dict(zip(df_config['TIPO_VEHICULO'], df_config['CONFIGURACION_ANALISIS']))
 
+def traducir_config(config):
+    """Traduce configuración usando el mapeo, si es necesario."""
+    config = config.upper()
+    return mapeo_config.get(config, config)
+
 # =======================================
 # 1. HISTÓRICO DE VALORES DE MERCADO
 # =======================================
 def obtener_valores_promedio_mercado(origen, destino, configuracion):
-    config = configuracion.upper()
-    config = mapeo_config.get(config, config)  # Traduce si es necesario (de la modificación anterior)
-    
-    # Construye la ruta esperada como string (evita issues de tipos numéricos)
-    origen_str = str(int(origen))  # Convierte a int primero para remover .0 si es float, luego a str
+    config = traducir_config(configuracion)
+    origen_str = str(int(origen))
     destino_str = str(int(destino))
     ruta_esperada = f"{origen_str}-{destino_str}-{config}"
-    
-    # Depuración: Imprime para ver qué se busca
+
     print(f"Buscando ruta: {ruta_esperada}")
-    
-    # Asegura que RUTA_CONFIGURACION sea str y upper
+
     df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper()
-    
-    # Filtro por la columna concatenada (más eficiente)
     filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_esperada.upper())
     df_filtrado = df_valores[filtro]
-    
-    # Depuración: Imprime si se encontró algo
+
     print(f"Filas encontradas: {len(df_filtrado)}")
-    
-    # Lista de todos los meses disponibles (puede que no tengan valor promedio)
+    print(df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]])
+
+    # Conversión robusta a numérico
+    df_filtrado["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(df_filtrado["VALOR_PROMEDIO_MERCADO"], errors="coerce")
+    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
+    valores_mes = df_resultado.to_dict(orient="records")
+
     meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
-    
+
     if df_filtrado.empty:
-        # Intenta con ruta invertida por si el dato está al revés
+        # Prueba con ruta invertida
         ruta_invertida = f"{destino_str}-{origen_str}-{config}"
         print(f"No se encontró, probando invertida: {ruta_invertida}")
         filtro_invertido = (df_valores["RUTA_CONFIGURACION"] == ruta_invertida.upper())
         df_filtrado = df_valores[filtro_invertido]
+        print(f"Filas invertidas encontradas: {len(df_filtrado)}")
+        df_filtrado["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(df_filtrado["VALOR_PROMEDIO_MERCADO"], errors="coerce")
+        df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
+        valores_mes = df_resultado.to_dict(orient="records")
         meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
         if df_filtrado.empty:
             return {
                 "valores_mes": [],
-                "meses_disponibles": meses_disponibles
+                "meses_disponibles": []
             }
-    
-    # Solo los meses donde sí hay valor promedio registrado (no NaN)
-    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].dropna(subset=["VALOR_PROMEDIO_MERCADO"]).sort_values("MES")
-    valores_mes = df_resultado.to_dict(orient="records")
-    
+
     return {
         "valores_mes": valores_mes,
         "meses_disponibles": meses_disponibles
     }
+
 # =======================================
 # 2. INDICADORES OPERATIVOS
 # =======================================
 def obtener_indicadores(municipio_dane, configuracion):
-    config = configuracion.upper()
-    config = mapeo_config.get(config, config)  # Traduce si es necesario
+    config = traducir_config(configuracion)
     df_filtro = df_tiempos[
         (df_tiempos["CODIGO_OBJETIVO"] == int(municipio_dane)) &
         (df_tiempos["CONFIGURACION"].str.upper() == config)
@@ -108,8 +110,7 @@ def obtener_indicadores(municipio_dane, configuracion):
 # 3. COMPETITIVIDAD POR RUTA
 # =======================================
 def evaluar_competitividad(origen, destino, configuracion):
-    config = configuracion.upper()
-    config = mapeo_config.get(config, config)  # Traduce si es necesario
+    config = traducir_config(configuracion)
     fila = df_competitividad[
         (df_competitividad["CODIGO_ORIGEN"] == int(origen)) &
         (df_competitividad["CODIGO_DESTINO"] == int(destino)) &
@@ -123,36 +124,26 @@ def evaluar_competitividad(origen, destino, configuracion):
 # 4. MESES DISPONIBLES PARA MERCADO
 # =======================================
 def obtener_meses_disponibles_mercado(cod_origen, cod_destino, config):
-    config = config.upper()
-    config = mapeo_config.get(config, config)  # Traduce si es necesario
-    
-    # Construye la ruta esperada como string
+    config = traducir_config(config)
     origen_str = str(int(cod_origen))
     destino_str = str(int(cod_destino))
     ruta_esperada = f"{origen_str}-{destino_str}-{config}"
-    
-    # Depuración
     print(f"Buscando meses para ruta: {ruta_esperada}")
-    
     df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper()
-    
     filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_esperada.upper())
     meses = df_valores.loc[filtro, "MES"].dropna().unique()
-    
     if len(meses) == 0:
         # Prueba invertida
         ruta_invertida = f"{destino_str}-{origen_str}-{config}"
         filtro_invertido = (df_valores["RUTA_CONFIGURACION"] == ruta_invertida.upper())
         meses = df_valores.loc[filtro_invertido, "MES"].dropna().unique()
-    
     return sorted([int(m) for m in meses])
 
 # =======================================
 # 5. MESES DISPONIBLES PARA INDICADORES
 # =======================================
 def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
-    config = configuracion.upper()
-    config = mapeo_config.get(config, config)  # Traduce si es necesario
+    config = traducir_config(configuracion)
     filtro = (
         (df["CODIGO_OBJETIVO"] == int(codigo_objetivo)) &
         (df["CONFIGURACION"].str.upper() == config.upper())
