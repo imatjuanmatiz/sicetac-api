@@ -41,18 +41,21 @@ def traducir_config(config):
 
 def obtener_valores_promedio_mercado_por_llave(ruta_config):
     """
-    Devuelve una lista de diccionarios {'MES': ..., 'VALOR_PROMEDIO_MERCADO': ...}
+    Devuelve una lista de diccionarios
+    {'MES': ..., 'VALOR_PROMEDIO_MERCADO': ..., 'VALOR_PROMEDIO_VALPAGADOS': ...}
     para cada mes registrado en el Excel, según la llave exacta 'RUTA_CONFIGURACION'.
     """
     ruta_config = str(ruta_config).strip().upper()
     df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper().str.strip()
+    # Asegúrate que ambas columnas son numéricas
     df_valores["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(df_valores["VALOR_PROMEDIO_MERCADO"], errors="coerce")
+    df_valores["VALOR_PROMEDIO_VALPAGADOS"] = pd.to_numeric(df_valores["VALOR_PROMEDIO_VALPAGADOS"], errors="coerce")
 
     # DEBUG para ver exactamente qué filas se están usando
     print(f"🔍 Buscando ruta_config: {ruta_config}")
     df_filtrado = df_valores[df_valores["RUTA_CONFIGURACION"] == ruta_config]
     print("Filas encontradas:", len(df_filtrado))
-    print(df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]])
+    print(df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO", "VALOR_PROMEDIO_VALPAGADOS"]])
 
     # Si no hay datos, retorna lista vacía
     if df_filtrado.empty:
@@ -60,8 +63,7 @@ def obtener_valores_promedio_mercado_por_llave(ruta_config):
 
     # Ordena y retorna solo lo que pide el API
     df_filtrado = df_filtrado.sort_values("MES")
-    return df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].to_dict(orient="records")
-
+    return df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO", "VALOR_PROMEDIO_VALPAGADOS"]].to_dict(orient="records")
 
 # =======================================
 # 2. INDICADORES OPERATIVOS
