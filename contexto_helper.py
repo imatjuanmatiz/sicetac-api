@@ -38,48 +38,6 @@ def traducir_config(config):
 # =======================================
 # 1. HISTÓRICO DE VALORES DE MERCADO
 # =======================================
-def obtener_valores_promedio_mercado(origen, destino, configuracion):
-    config = traducir_config(configuracion)
-    origen_str = str(int(origen))
-    destino_str = str(int(destino))
-    ruta_esperada = f"{origen_str}-{destino_str}-{config}"
-
-    print(f"Buscando ruta: {ruta_esperada}")
-    df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper()
-    filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_esperada.upper())
-    df_filtrado = df_valores[filtro]
-
-    print(f"Filas encontradas: {len(df_filtrado)}")
-    print(df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]])
-
-    # Conversión robusta a numérico
-    df_filtrado["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(df_filtrado["VALOR_PROMEDIO_MERCADO"], errors="coerce")
-    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
-    valores_mes = df_resultado.to_dict(orient="records")
-
-    meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
-
-    if df_filtrado.empty:
-        # Prueba con ruta invertida
-        ruta_invertida = f"{destino_str}-{origen_str}-{config}"
-        print(f"No se encontró, probando invertida: {ruta_invertida}")
-        filtro_invertido = (df_valores["RUTA_CONFIGURACION"] == ruta_invertida.upper())
-        df_filtrado = df_valores[filtro_invertido]
-        print(f"Filas invertidas encontradas: {len(df_filtrado)}")
-        df_filtrado["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(df_filtrado["VALOR_PROMEDIO_MERCADO"], errors="coerce")
-        df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
-        valores_mes = df_resultado.to_dict(orient="records")
-        meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
-        if df_filtrado.empty:
-            return {
-                "valores_mes": [],
-                "meses_disponibles": []
-            }
-
-    return {
-        "valores_mes": valores_mes,
-        "meses_disponibles": meses_disponibles
-    }
 
 def obtener_valores_promedio_mercado_por_llave(ruta_config):
     # Normaliza la llave a mayúsculas y sin espacios
