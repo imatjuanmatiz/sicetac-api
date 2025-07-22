@@ -162,11 +162,6 @@ def calcular_sicetac(data: ConsultaInput):
             competitividad = None
 
         try:
-            meses_mercado = obtener_meses_disponibles_mercado(cod_origen, cod_destino, vehiculo_upper)
-        except Exception as e:
-            meses_mercado = None
-
-        try:
             meses_indicadores_origen = obtener_meses_disponibles_indicador(df_indicadores, cod_origen, vehiculo_upper)
         except Exception as e:
             meses_indicadores_origen = None
@@ -180,7 +175,6 @@ def calcular_sicetac(data: ConsultaInput):
         respuesta = {
             "SICETAC": resultado_convertido,
             "HISTORICO_VALOR_MERCADO": historico_mercado["valores_mes"] if historico_mercado else [],
-            "MESES_MERCADO_DISPONIBLES": historico_mercado["meses_disponibles"] if historico_mercado else [],
             "INDICADORES_ORIGEN": indicadores_origen,
             "INDICADORES_DESTINO": indicadores_destino,
             "COMPETITIVIDAD": competitividad,
