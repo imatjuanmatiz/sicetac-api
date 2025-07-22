@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
+import math
+import unicodedata
+from depto_helper import DeptoHelper  # Asumiendo que existe, como en el original
 
 # =========================================
 # 🧹 Función para limpiar NaN en los outputs
 # =========================================
 def limpiar_nan_json(obj):
-    import math
     if isinstance(obj, dict):
         return {k: limpiar_nan_json(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -22,12 +24,18 @@ df_valores = pd.read_excel("VALORES_CONSOLIDADOS_2025.xlsx")
 df_tiempos = pd.read_excel("indice_cargue_descargue_resumen_mensual.xlsx")
 df_competitividad = pd.read_excel("competitividad_rutas_2025.xlsx")
 
+# Nueva carga: Mapeo de configuraciones vehiculares
+df_config = pd.read_excel("CONFIGURACION_VEHICULAR_LIMPIO.xlsx")
+df_config['TIPO_VEHICULO'] = df_config['TIPO_VEHICULO'].astype(str).str.strip().str.upper()
+df_config['CONFIGURACION_ANALISIS'] = df_config['CONFIGURACION_ANALISIS'].astype(str).str.strip().str.upper()
+mapeo_config = dict(zip(df_config['TIPO_VEHICULO'], df_config['CONFIGURACION_ANALISIS']))
 
 # =======================================
 # 1. HISTÓRICO DE VALORES DE MERCADO
 # =======================================
 def obtener_valores_promedio_mercado(origen, destino, configuracion):
     config = configuracion.upper()
+    config = mapeo_config.get(config, config)  # Traduce si es necesario (ej. 'C3S3' → '3S3')
     df_valores["CONFIGURACION_ANALISIS"] = df_valores["CONFIGURACION_ANALISIS"].astype(str)
     filtro = (
         (df_valores["CODIGO_ORIGEN"] == int(origen)) &
@@ -58,6 +66,7 @@ def obtener_valores_promedio_mercado(origen, destino, configuracion):
 # =======================================
 def obtener_indicadores(municipio_dane, configuracion):
     config = configuracion.upper()
+    config = mapeo_config.get(config, config)  # Traduce si es necesario
     df_filtro = df_tiempos[
         (df_tiempos["CODIGO_OBJETIVO"] == int(municipio_dane)) &
         (df_tiempos["CONFIGURACION"].str.upper() == config)
@@ -77,12 +86,12 @@ def obtener_indicadores(municipio_dane, configuracion):
         )
     }
 
-
 # =======================================
 # 3. COMPETITIVIDAD POR RUTA
 # =======================================
 def evaluar_competitividad(origen, destino, configuracion):
     config = configuracion.upper()
+    config = mapeo_config.get(config, config)  # Traduce si es necesario
     fila = df_competitividad[
         (df_competitividad["CODIGO_ORIGEN"] == int(origen)) &
         (df_competitividad["CODIGO_DESTINO"] == int(destino)) &
@@ -92,11 +101,12 @@ def evaluar_competitividad(origen, destino, configuracion):
         return None
     return fila.iloc[0].to_dict()
 
-
 # =======================================
 # 4. MESES DISPONIBLES PARA MERCADO
 # =======================================
 def obtener_meses_disponibles_mercado(cod_origen, cod_destino, config):
+    config = config.upper()
+    config = mapeo_config.get(config, config)  # Traduce si es necesario
     filtro = (
         (df_valores["CODIGO_ORIGEN"] == int(cod_origen)) &
         (df_valores["CODIGO_DESTINO"] == int(cod_destino)) &
@@ -105,22 +115,23 @@ def obtener_meses_disponibles_mercado(cod_origen, cod_destino, config):
     meses = df_valores.loc[filtro, "MES"].dropna().unique()
     return sorted([int(m) for m in meses])
 
-
 # =======================================
 # 5. MESES DISPONIBLES PARA INDICADORES
 # =======================================
 def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
+    config = configuracion.upper()
+    config = mapeo_config.get(config, config)  # Traduce si es necesario
     filtro = (
         (df["CODIGO_OBJETIVO"] == int(codigo_objetivo)) &
-        (df["CONFIGURACION"].str.upper() == configuracion.upper())
+        (df["CONFIGURACION"].str.upper() == config.upper())
     )
     meses = df.loc[filtro, "AÑOMES"].dropna().unique()
     return sorted([int(m) for m in meses])
 
-
 # =======================================
 # 6. BLOQUEOS DE COLFECAR POR RUTA
 # =======================================
+# (Esta función no usa config, así que no se modifica)
 
 def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEPTO HELPER.xlsx'):
     """
