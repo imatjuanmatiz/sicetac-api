@@ -38,6 +38,18 @@ def traducir_config(config):
 # =======================================
 # 1. HISTÓRICO DE VALORES DE MERCADO
 # =======================================
+def obtener_meses_disponibles_mercado(cod_origen, cod_destino, config):
+    config = traducir_config(config)
+    origen_str = str(int(cod_origen))
+    destino_str = str(int(cod_destino))
+    ruta_esperada = f"{origen_str}-{destino_str}-{config}"
+    print(f"Buscando meses para ruta: {ruta_esperada}")
+    df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper()
+    filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_esperada.upper())
+    meses = df_valores.loc[filtro, "MES"].dropna().unique()
+    if len(meses) == 0:
+    return sorted([int(m) for m in meses])
+
 def obtener_valores_promedio_mercado(origen, destino, configuracion):
     config = traducir_config(configuracion)
     origen_str = str(int(origen))
@@ -127,27 +139,9 @@ def evaluar_competitividad(origen, destino, configuracion):
         return None
     return fila.iloc[0].to_dict()
 
-# =======================================
-# 4. MESES DISPONIBLES PARA MERCADO
-# =======================================
-def obtener_meses_disponibles_mercado(cod_origen, cod_destino, config):
-    config = traducir_config(config)
-    origen_str = str(int(cod_origen))
-    destino_str = str(int(cod_destino))
-    ruta_esperada = f"{origen_str}-{destino_str}-{config}"
-    print(f"Buscando meses para ruta: {ruta_esperada}")
-    df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper()
-    filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_esperada.upper())
-    meses = df_valores.loc[filtro, "MES"].dropna().unique()
-    if len(meses) == 0:
-        # Prueba invertida
-        ruta_invertida = f"{destino_str}-{origen_str}-{config}"
-        filtro_invertido = (df_valores["RUTA_CONFIGURACION"] == ruta_invertida.upper())
-        meses = df_valores.loc[filtro_invertido, "MES"].dropna().unique()
-    return sorted([int(m) for m in meses])
 
 # =======================================
-# 5. MESES DISPONIBLES PARA INDICADORES
+# 4. MESES DISPONIBLES PARA INDICADORES
 # =======================================
 def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
     config = traducir_config(configuracion)
@@ -159,7 +153,7 @@ def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
     return sorted([int(m) for m in meses])
 
 # =======================================
-# 6. BLOQUEOS DE COLFECAR POR RUTA
+# 5. BLOQUEOS DE COLFECAR POR RUTA
 # =======================================
 # (Esta función no usa config, así que no se modifica)
 
