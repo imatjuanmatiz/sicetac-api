@@ -142,7 +142,7 @@ def calcular_sicetac(data: ConsultaInput):
 
         # Helpers contextuales robustos
         try:
-            historico_mercado = obtener_valores_promedio_mercado(cod_origen, cod_destino, vehiculo_upper)
+            historico_mercado = obtener_valores_promedio_mercado(cod_origen, cod_destino, data.vehiculo)
         except Exception as e:
             historico_mercado = None
 
