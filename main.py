@@ -7,10 +7,9 @@ from fastapi.responses import JSONResponse
 from sicetac_helper import SICETACHelper
 from modelo_sicetac import calcular_modelo_sicetac_extendido
 from contexto_helper import (
-    obtener_valores_promedio_mercado,
+    obtener_valores_promedio_mercado_por_llave,
     obtener_indicadores,
-    evaluar_competitividad,
-    obtener_meses_disponibles_mercado,
+    evaluar_competitividad,,
     obtener_meses_disponibles_indicador,
     obtener_bloqueos_ruta_por_id
 )
@@ -142,6 +141,7 @@ def calcular_sicetac(data: ConsultaInput):
 
         # Helpers contextuales robustos
         try:
+            ruta_config = f"{cod_origen}-{cod_destino}-{data.vehiculo.strip().upper()}"
             historico_mercado = obtener_valores_promedio_mercado_por_llave(ruta_config)
         except Exception as e:
             historico_mercado = None
