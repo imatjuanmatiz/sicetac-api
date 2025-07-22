@@ -141,7 +141,7 @@ def calcular_sicetac(data: ConsultaInput):
 
         # Helpers contextuales robustos
         try:
-            ruta_config = f"{cod_origen}-{cod_destino}-{data.vehiculo.strip().upper()}"
+            ruta_config = f"{cod_origen}-{cod_destino}-{data.vehiculo.strip().upper().replace('C', '')}"
             historico_mercado = obtener_valores_promedio_mercado_por_llave(ruta_config)
         except Exception as e:
             historico_mercado = None
