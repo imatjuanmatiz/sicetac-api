@@ -35,32 +35,50 @@ mapeo_config = dict(zip(df_config['TIPO_VEHICULO'], df_config['CONFIGURACION_ANA
 # =======================================
 def obtener_valores_promedio_mercado(origen, destino, configuracion):
     config = configuracion.upper()
-    config = mapeo_config.get(config, config)  # Traduce si es necesario (ej. 'C3S3' → '3S3')
-    df_valores["CONFIGURACION_ANALISIS"] = df_valores["CONFIGURACION_ANALISIS"].astype(str)
-    filtro = (
-        (df_valores["CODIGO_ORIGEN"] == int(origen)) &
-        (df_valores["CODIGO_DESTINO"] == int(destino)) &
-        (df_valores["CONFIGURACION_ANALISIS"].str.upper() == config)
-    )
+    config = mapeo_config.get(config, config)  # Traduce si es necesario (de la modificación anterior)
+    
+    # Construye la ruta esperada como string (evita issues de tipos numéricos)
+    origen_str = str(int(origen))  # Convierte a int primero para remover .0 si es float, luego a str
+    destino_str = str(int(destino))
+    ruta_esperada = f"{origen_str}-{destino_str}-{config}"
+    
+    # Depuración: Imprime para ver qué se busca
+    print(f"Buscando ruta: {ruta_esperada}")
+    
+    # Asegura que RUTA_CONFIGURACION sea str y upper
+    df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper()
+    
+    # Filtro por la columna concatenada (más eficiente)
+    filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_esperada.upper())
     df_filtrado = df_valores[filtro]
-
+    
+    # Depuración: Imprime si se encontró algo
+    print(f"Filas encontradas: {len(df_filtrado)}")
+    
     # Lista de todos los meses disponibles (puede que no tengan valor promedio)
     meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
     
     if df_filtrado.empty:
-        return {
-            "valores_mes": [],
-            "meses_disponibles": meses_disponibles
-        }
+        # Intenta con ruta invertida por si el dato está al revés
+        ruta_invertida = f"{destino_str}-{origen_str}-{config}"
+        print(f"No se encontró, probando invertida: {ruta_invertida}")
+        filtro_invertido = (df_valores["RUTA_CONFIGURACION"] == ruta_invertida.upper())
+        df_filtrado = df_valores[filtro_invertido]
+        meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
+        if df_filtrado.empty:
+            return {
+                "valores_mes": [],
+                "meses_disponibles": meses_disponibles
+            }
+    
     # Solo los meses donde sí hay valor promedio registrado (no NaN)
-    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
+    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].dropna(subset=["VALOR_PROMEDIO_MERCADO"]).sort_values("MES")
     valores_mes = df_resultado.to_dict(orient="records")
     
     return {
         "valores_mes": valores_mes,
         "meses_disponibles": meses_disponibles
     }
-
 # =======================================
 # 2. INDICADORES OPERATIVOS
 # =======================================
@@ -107,12 +125,26 @@ def evaluar_competitividad(origen, destino, configuracion):
 def obtener_meses_disponibles_mercado(cod_origen, cod_destino, config):
     config = config.upper()
     config = mapeo_config.get(config, config)  # Traduce si es necesario
-    filtro = (
-        (df_valores["CODIGO_ORIGEN"] == int(cod_origen)) &
-        (df_valores["CODIGO_DESTINO"] == int(cod_destino)) &
-        (df_valores["CONFIGURACION_ANALISIS"].str.upper() == config.upper())
-    )
+    
+    # Construye la ruta esperada como string
+    origen_str = str(int(cod_origen))
+    destino_str = str(int(cod_destino))
+    ruta_esperada = f"{origen_str}-{destino_str}-{config}"
+    
+    # Depuración
+    print(f"Buscando meses para ruta: {ruta_esperada}")
+    
+    df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper()
+    
+    filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_esperada.upper())
     meses = df_valores.loc[filtro, "MES"].dropna().unique()
+    
+    if len(meses) == 0:
+        # Prueba invertida
+        ruta_invertida = f"{destino_str}-{origen_str}-{config}"
+        filtro_invertido = (df_valores["RUTA_CONFIGURACION"] == ruta_invertida.upper())
+        meses = df_valores.loc[filtro_invertido, "MES"].dropna().unique()
+    
     return sorted([int(m) for m in meses])
 
 # =======================================
