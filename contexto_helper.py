@@ -40,33 +40,27 @@ def traducir_config(config):
 # =======================================
 
 def obtener_valores_promedio_mercado_por_llave(ruta_config):
-    # Normaliza la llave a mayúsculas y sin espacios
+    """
+    Devuelve una lista de diccionarios {'MES': ..., 'VALOR_PROMEDIO_MERCADO': ...}
+    para cada mes registrado en el Excel, según la llave exacta 'RUTA_CONFIGURACION'.
+    """
     ruta_config = str(ruta_config).strip().upper()
-    print(f"Buscando ruta directa: {ruta_config}")
-
     df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper().str.strip()
-    filtro = (df_valores["RUTA_CONFIGURACION"] == ruta_config)
-    df_filtrado = df_valores[filtro]
+    df_valores["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(df_valores["VALOR_PROMEDIO_MERCADO"], errors="coerce")
 
-    print(f"Filas encontradas con llave directa: {len(df_filtrado)}")
+    # DEBUG para ver exactamente qué filas se están usando
+    print(f"🔍 Buscando ruta_config: {ruta_config}")
+    df_filtrado = df_valores[df_valores["RUTA_CONFIGURACION"] == ruta_config]
+    print("Filas encontradas:", len(df_filtrado))
+    print(df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]])
 
+    # Si no hay datos, retorna lista vacía
     if df_filtrado.empty:
-        # Si no hay resultados, devolvemos vacío
-        return {
-            "valores_mes": [],
-            "meses_disponibles": []
-        }
+        return []
 
-    # Conversión robusta a numérico
-    df_filtrado["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(df_filtrado["VALOR_PROMEDIO_MERCADO"], errors="coerce")
-    df_resultado = df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].sort_values("MES")
-    valores_mes = df_resultado.to_dict(orient="records")
-    meses_disponibles = sorted(df_filtrado["MES"].unique().tolist())
-
-    return {
-        "valores_mes": valores_mes,
-        "meses_disponibles": meses_disponibles
-    }
+    # Ordena y retorna solo lo que pide el API
+    df_filtrado = df_filtrado.sort_values("MES")
+    return df_filtrado[["MES", "VALOR_PROMEDIO_MERCADO"]].to_dict(orient="records")
 
 
 # =======================================
