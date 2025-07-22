@@ -60,7 +60,6 @@ def convertir_nativos(d):
     else:
         return d
 
-
 @app.post("/consulta")
 def calcular_sicetac(data: ConsultaInput):
     try:
@@ -177,13 +176,14 @@ def calcular_sicetac(data: ConsultaInput):
         except Exception as e:
             meses_indicadores_destino = None
 
+        # 🔥 Aquí el cambio: historico_mercado["valores_mes"] para el campo de la API
         respuesta = {
             "SICETAC": resultado_convertido,
-            "HISTORICO_VALOR_MERCADO": historico_mercado,
+            "HISTORICO_VALOR_MERCADO": historico_mercado["valores_mes"] if historico_mercado else [],
+            "MESES_MERCADO_DISPONIBLES": historico_mercado["meses_disponibles"] if historico_mercado else [],
             "INDICADORES_ORIGEN": indicadores_origen,
             "INDICADORES_DESTINO": indicadores_destino,
             "COMPETITIVIDAD": competitividad,
-            "MESES_MERCADO_DISPONIBLES": meses_mercado,
             "MESES_INDICADORES_ORIGEN": meses_indicadores_origen,
             "MESES_INDICADORES_DESTINO": meses_indicadores_destino
         }
@@ -193,12 +193,3 @@ def calcular_sicetac(data: ConsultaInput):
         raise ex
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-@app.get("/consulta_bloqueos")
-def consulta_bloqueos(origen_dane: int, destino_dane: int):
-    """
-    Endpoint para obtener análisis de bloqueos en una ruta, usando los códigos DANE.
-    """
-    resultado = obtener_bloqueos_ruta_por_id(origen_dane, destino_dane)
-    return resultado
