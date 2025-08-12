@@ -44,7 +44,7 @@ def calcular_modelo_sicetac_extendido_vacio(
         detalle[tipo] = {"km": km, "horas": hrs, "gal": gal}
 
     # --- 4. Horas logísticas ---
-    horas_log = horas_logisticas if horas_logisticas is not None else (4 if total_horas < 8 else 8)
+    horas_log = horas_logisticas if horas_logisticas is not None else (0 if total_horas < 8 else 0)
     horas_totales = total_horas + horas_log
     recorridos = max(1, round(288 / horas_totales, 4))
 
