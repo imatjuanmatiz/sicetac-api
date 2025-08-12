@@ -4,6 +4,16 @@ import math
 import unicodedata
 from depto_helper import DeptoHelper  # Si usas este helper en bloqueos
 
+# contexto_helper.py
+_modo_viaje_global = "CARGADO"
+
+def set_modo_viaje(modo: str):
+    global _modo_viaje_global
+    _modo_viaje_global = str(modo).upper().strip()
+
+def get_modo_viaje() -> str:
+    return _modo_viaje_global
+
 # =========================================
 # 🧹 Función para limpiar NaN en los outputs
 # =========================================
