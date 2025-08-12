@@ -85,7 +85,7 @@ def calcular_modelo_sicetac_extendido_vacio(
     total_variable = round(costo_combustible + valor_peaje + costo_variables + imprevistos, 2)
 
     # --- 9. Otros costos (administrativos, seguros, etc) ---
-    otros_costos = round((costo_fijo_viaje + total_variable) * 0.224824, 2)
+    otros_costos = round((costo_fijo_viaje + total_variable) * 0.221824, 2)
 
     # --- 10. Total ---
     total_viaje = round(costo_fijo_viaje + total_variable + otros_costos, 2)
