@@ -17,6 +17,12 @@ from contexto_helper import (
     set_modo_viaje
 )
 
+# Importación robusta del set_modo_viaje (si no está, no rompe)
+try:
+    from contexto_helper import set_modo_viaje
+except ImportError:
+    def set_modo_viaje(_):
+        return None
 
 app = FastAPI(title="API SICETAC", version="1.5")
 
