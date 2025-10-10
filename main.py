@@ -30,7 +30,7 @@ class ConsultaInput(BaseModel):
     origen: str
     destino: str
     vehiculo: str = "C3S3"
-    mes: int = 202508
+    mes: int = 202510
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
     horas_logisticas: float | None = None
