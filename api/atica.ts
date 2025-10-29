@@ -61,7 +61,7 @@ const tools = [
 async function callFastAPI(args: any) {
   const base = process.env.ATICA_FASTAPI_URL;
   if (!base) throw new Error("ATICA_FASTAPI_URL no configurado");
-  const url = `${base}/sicetac/costo`;
+const url = `${base}/consulta`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
