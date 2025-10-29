@@ -49,14 +49,22 @@ const tools = [
         origen: { type: "string", description: "Municipio origen" },
         destino: { type: "string", description: "Municipio destino" },
         vehiculo: { type: "string", description: "Ej. C3S3" },
+        mes: { type: "number", description: "YYYYMM, ej. 202510 (número)" },
         carroceria: { type: "string", description: "Ej. GENERAL" },
-        modo_viaje: { type: "string", enum: ["CARGADO", "VACIO"] },
-        mes: { type: "string", description: "YYYYMM, ej. 202510" }
+        valor_peaje_manual: { type: "number" },
+        horas_logisticas: { type: "number" },
+        km_plano: { type: "number" },
+        km_ondulado: { type: "number" },
+        km_montañoso: { type: "number" },
+        km_urbano: { type: "number" },
+        km_despavimentado: { type: "number" },
+        modo_viaje: { type: "string", enum: ["CARGADO", "VACIO"] }
       },
       required: ["origen", "destino"]
     }
   }
 ] as const;
+
 
 async function callFastAPI(args: any) {
   const base = process.env.ATICA_FASTAPI_URL;
