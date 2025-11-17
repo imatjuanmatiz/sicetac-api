@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import OpenAI from "openai";
 
 // Requiere en Vercel/Local:
-// OPENAI_API_KEY=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
+// OPENAI_API_KEY=
 // ATICA_FASTAPI_URL=https://sicetac-api.onrender.com
 // ATICA_FASTAPI_TOKEN=
 
