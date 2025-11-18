@@ -30,16 +30,29 @@ class ConsultaInput(BaseModel):
     origen: str
     destino: str
     vehiculo: str = "C3S3"
-    mes: int = 202510
+    mes: int = 202508
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
-    horas_logisticas: float | None = None
+
+    # LEGACY: sigue existiendo para no romper nada
+    horas_logisticas: float | None = None  # override "duro" del modelo (antes)
+
+    # NUEVO: tiempo logístico que pide el usuario (cargue/descargue total)
+    horas_logisticas_personalizadas: float | None = None
+
+    # NUEVO: tarifa de stand by por hora > 8h
+    tarifa_standby: float = 150000.0  # COP por hora de stand by
+
     km_plano: float = 0
     km_ondulado: float = 0
     km_montañoso: float = 0
     km_urbano: float = 0
     km_despavimentado: float = 0
     modo_viaje: str = "CARGADO"  # "CARGADO" | "VACIO"
+
+    # NUEVO: modo escenarios de tiempos logísticos
+    modo_tiempos_logisticos: bool = False  # 0h / 4–8h / personalizado
+
 
 ARCHIVOS = {
     "municipios": "municipios.xlsx",
@@ -132,77 +145,160 @@ def calcular_sicetac(data: ConsultaInput):
 
         # --- Routing por modo ---
         set_modo_viaje(data.modo_viaje)
-        if data.modo_viaje.upper() == "VACIO":
-            resultado = calcular_modelo_sicetac_extendido_vacio(
-                origen=data.origen,
-                destino=data.destino,
-                configuracion=data.vehiculo,
-                serie=int(data.mes),
-                distancias=distancias,
-                valor_peaje_manual=data.valor_peaje_manual,
-                matriz_parametros=df_parametros,
-                matriz_costos_fijos=df_costos_fijos,
-                matriz_vehicular=df_vehiculos,
-                rutas_df=df_rutas,
-                peajes_df=df_peajes,
-                carroceria_especial=data.carroceria,
-                ruta_oficial=fila_ruta,
-                horas_logisticas=data.horas_logisticas
-            )
+
+        # Helper interno para ejecutar el modelo correcto
+        def _ejecutar_modelo(horas_logisticas_modelo: float | None):
+            if data.modo_viaje.upper() == "VACIO":
+                return calcular_modelo_sicetac_extendido_vacio(
+                    origen=data.origen,
+                    destino=data.destino,
+                    configuracion=data.vehiculo,
+                    serie=int(data.mes),
+                    distancias=distancias,
+                    valor_peaje_manual=data.valor_peaje_manual,
+                    matriz_parametros=df_parametros,
+                    matriz_costos_fijos=df_costos_fijos,
+                    matriz_vehicular=df_vehiculos,
+                    rutas_df=df_rutas,
+                    peajes_df=df_peajes,
+                    carroceria_especial=data.carroceria,
+                    ruta_oficial=fila_ruta,
+                    horas_logisticas=horas_logisticas_modelo,
+                )
+            else:
+                return calcular_modelo_sicetac_extendido(
+                    origen=data.origen,
+                    destino=data.destino,
+                    configuracion=data.vehiculo,
+                    serie=int(data.mes),
+                    distancias=distancias,
+                    valor_peaje_manual=data.valor_peaje_manual,
+                    matriz_parametros=df_parametros,
+                    matriz_costos_fijos=df_costos_fijos,
+                    matriz_vehicular=df_vehiculos,
+                    rutas_df=df_rutas,
+                    peajes_df=df_peajes,
+                    carroceria_especial=data.carroceria,
+                    ruta_oficial=fila_ruta,
+                    horas_logisticas=horas_logisticas_modelo,
+                )
+
+        # Helper para normalizar el nombre del total en salidas de VACÍO
+        def _normalizar_total(res: dict | None):
+            if res is None:
+                return None
+            if "total_viaje" not in res and "total_viaje_vacio" in res:
+                res["total_viaje"] = res["total_viaje_vacio"]
+            return res
+
+        # =============================
+        # 1. Escenarios de tiempos logísticos
+        # =============================
+        resultado = None
+        escenarios_tiempos = None
+
+        if data.modo_tiempos_logisticos:
+            # Escenario movilización: 0 horas logísticas
+            res_movilizacion = _normalizar_total(_ejecutar_modelo(0))
+
+            # Escenario SICETAC por defecto (4 u 8 horas según total_horas del modelo)
+            res_sicetac = _normalizar_total(_ejecutar_modelo(None))
+
+            # Escenario personalizado (si el usuario pasó horas_logisticas_personalizadas)
+            res_personalizado = None
+            if data.horas_logisticas_personalizadas is not None:
+                horas_usuario = float(data.horas_logisticas_personalizadas)
+                horas_base = min(horas_usuario, 8.0)
+                horas_extra = max(horas_usuario - 8.0, 0.0)
+
+                # Ejecuta el modelo con máximo 8h logísticas "normales"
+                res_base = _normalizar_total(_ejecutar_modelo(horas_base))
+                if res_base is not None:
+                    res_personalizado = convertir_nativos(res_base)
+                    costo_standby = round(horas_extra * float(data.tarifa_standby), 2)
+                    total_viaje = float(res_personalizado.get("total_viaje", 0))
+                    res_personalizado.update({
+                        "horas_logisticas_usuario": horas_usuario,
+                        "horas_logisticas_base": horas_base,
+                        "horas_standby_adicionales": horas_extra,
+                        "tarifa_standby": float(data.tarifa_standby),
+                        "costo_standby": costo_standby,
+                        "total_viaje_ajustado": round(total_viaje + costo_standby, 2),
+                    })
+
+            escenarios_tiempos = {
+                "MOVILIZACION": convertir_nativos(res_movilizacion) if res_movilizacion else None,
+                "SICETAC_DEFECTO": convertir_nativos(res_sicetac) if res_sicetac else None,
+                "PERSONALIZADO": res_personalizado,
+            }
+
+            # Por compatibilidad, dejamos como principal el escenario SICETAC por defecto
+            resultado = res_sicetac or res_movilizacion or res_personalizado
         else:
-            resultado = calcular_modelo_sicetac_extendido(
-                origen=data.origen,
-                destino=data.destino,
-                configuracion=data.vehiculo,
-                serie=int(data.mes),
-                distancias=distancias,
-                valor_peaje_manual=data.valor_peaje_manual,
-                matriz_parametros=df_parametros,
-                matriz_costos_fijos=df_costos_fijos,
-                matriz_vehicular=df_vehiculos,
-                rutas_df=df_rutas,
-                peajes_df=df_peajes,
-                carroceria_especial=data.carroceria,
-                ruta_oficial=fila_ruta,
-                horas_logisticas=data.horas_logisticas
-            )
+            # =============================
+            # 2. Comportamiento normal (sin escenarios)
+            # =============================
+            if data.horas_logisticas_personalizadas is not None:
+                # Nuevo comportamiento: tiempo logístico definido por el usuario
+                horas_usuario = float(data.horas_logisticas_personalizadas)
+                horas_base = min(horas_usuario, 8.0)
+                horas_extra = max(horas_usuario - 8.0, 0.0)
 
-        # Normalizar salida total_viaje si viene del módulo de vacío
-        if "total_viaje" not in resultado and "total_viaje_vacio" in resultado:
-            resultado["total_viaje"] = resultado["total_viaje_vacio"]
+                res_base = _normalizar_total(_ejecutar_modelo(horas_base))
+                resultado = res_base
 
-        resultado_convertido = convertir_nativos(resultado)
+                # Si hay horas extra, calculamos stand by
+                if resultado is not None and horas_extra > 0:
+                    resultado = convertir_nativos(resultado)
+                    costo_standby = round(horas_extra * float(data.tarifa_standby), 2)
+                    total_viaje = float(resultado.get("total_viaje", 0))
+                    resultado.update({
+                        "horas_logisticas_usuario": horas_usuario,
+                        "horas_logisticas_base": horas_base,
+                        "horas_standby_adicionales": horas_extra,
+                        "tarifa_standby": float(data.tarifa_standby),
+                        "costo_standby": costo_standby,
+                        "total_viaje_ajustado": round(total_viaje + costo_standby, 2),
+                    })
+            else:
+                # Legacy: usa la lógica original
+                # (horas_logisticas=None => 4/8 horas; o valor duro si viene en el JSON)
+                resultado = _normalizar_total(_ejecutar_modelo(data.horas_logisticas))
+
+        # Normalizar y convertir
+        resultado = _normalizar_total(resultado)
+        resultado_convertido = convertir_nativos(resultado) if resultado is not None else None
 
         # Helpers contextuales robustos
         try:
             ruta_config = f"{cod_origen}-{cod_destino}-{data.vehiculo.strip().upper().replace('C', '')}"
             historico_mercado = obtener_valores_promedio_mercado_por_llave(ruta_config)
-        except Exception as e:
+        except Exception:
             historico_mercado = None
 
         try:
             indicadores_origen = obtener_indicadores(cod_origen, vehiculo_upper)
-        except Exception as e:
+        except Exception:
             indicadores_origen = None
 
         try:
             indicadores_destino = obtener_indicadores(cod_destino, vehiculo_upper)
-        except Exception as e:
+        except Exception:
             indicadores_destino = None
 
         try:
             competitividad = evaluar_competitividad(cod_origen, cod_destino, vehiculo_upper)
-        except Exception as e:
+        except Exception:
             competitividad = None
 
         try:
             meses_indicadores_origen = obtener_meses_disponibles_indicador(df_indicadores, cod_origen, vehiculo_upper)
-        except Exception as e:
+        except Exception:
             meses_indicadores_origen = None
 
         try:
             meses_indicadores_destino = obtener_meses_disponibles_indicador(df_indicadores, cod_destino, vehiculo_upper)
-        except Exception as e:
+        except Exception:
             meses_indicadores_destino = None
 
         respuesta = {
@@ -213,8 +309,13 @@ def calcular_sicetac(data: ConsultaInput):
             "INDICADORES_DESTINO": indicadores_destino,
             "COMPETITIVIDAD": competitividad,
             "MESES_INDICADORES_ORIGEN": meses_indicadores_origen,
-            "MESES_INDICADORES_DESTINO": meses_indicadores_destino
+            "MESES_INDICADORES_DESTINO": meses_indicadores_destino,
         }
+
+        if escenarios_tiempos is not None:
+            respuesta["MODO_TIEMPOS_LOGISTICOS"] = True
+            respuesta["ESCENARIOS_TIEMPOS_LOGISTICOS"] = escenarios_tiempos
+
         return JSONResponse(content=respuesta)
 
     except HTTPException as ex:
