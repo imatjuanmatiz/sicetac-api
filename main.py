@@ -354,18 +354,19 @@ def calcular_sicetac(data: ConsultaInput):
         except Exception:
             meses_indicadores_destino = None
 
+       # Asegurar que INFO_RUTA_APROXIMADA también esté en tipos nativos (no numpy)
+        info_ruta_aproximada_nativa = convertir_nativos(info_ruta_aproximada) if info_ruta_aproximada else None
+
         respuesta = {
             "SICETAC": resultado_convertido,
             "MODO_VIAJE": data.modo_viaje.upper(),
-            "HISTORICO_VALOR_MERCADO": historico_mercado
-            if historico_mercado
-            else [],
+            "HISTORICO_VALOR_MERCADO": historico_mercado if historico_mercado else [],
             "INDICADORES_ORIGEN": indicadores_origen,
             "INDICADORES_DESTINO": indicadores_destino,
             "COMPETITIVIDAD": competitividad,
             "MESES_INDICADORES_ORIGEN": meses_indicadores_origen,
             "MESES_INDICADORES_DESTINO": meses_indicadores_destino,
-            "INFO_RUTA_APROXIMADA": info_ruta_aproximada,
+            "INFO_RUTA_APROXIMADA": info_ruta_aproximada_nativa,
         }
 
         if escenarios_tiempos is not None:
