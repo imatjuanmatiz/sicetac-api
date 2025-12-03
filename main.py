@@ -228,17 +228,17 @@ def calcular_sicetac(data: ConsultaInput):
             # Escenario movilización: 0 horas logísticas
             res_movilizacion = _normalizar_total(_ejecutar_modelo(0))
 
-            # Escenario SICETAC por defecto (4 u 8 horas según el modelo)
+            # Escenario SICETAC por defecto (2 horas logisticas totales)
             res_sicetac = _normalizar_total(_ejecutar_modelo(None))
 
             # Escenario personalizado (si el usuario pasó horas_logisticas_personalizadas)
             res_personalizado = None
             if data.horas_logisticas_personalizadas is not None:
                 horas_usuario = float(data.horas_logisticas_personalizadas)
-                horas_base = min(horas_usuario, 8.0)
-                horas_extra = max(horas_usuario - 8.0, 0.0)
+                horas_base = min(horas_usuario, 2.0)
+                horas_extra = max(horas_usuario - 2.0, 0.0)
 
-                # Ejecuta el modelo con máximo 8h logísticas "normales"
+                # Ejecuta el modelo con máximo 2h logísticas "normales"
                 res_base = _normalizar_total(_ejecutar_modelo(horas_base))
                 if res_base is not None:
                     res_personalizado = convertir_nativos(res_base)
@@ -278,8 +278,8 @@ def calcular_sicetac(data: ConsultaInput):
             if data.horas_logisticas_personalizadas is not None:
                 # Nuevo comportamiento: tiempo logístico definido por el usuario
                 horas_usuario = float(data.horas_logisticas_personalizadas)
-                horas_base = min(horas_usuario, 8.0)
-                horas_extra = max(horas_usuario - 8.0, 0.0)
+                horas_base = min(horas_usuario, 2.0)
+                horas_extra = max(horas_usuario - 2.0, 0.0)
 
                 res_base = _normalizar_total(_ejecutar_modelo(horas_base))
                 resultado = res_base
@@ -305,7 +305,7 @@ def calcular_sicetac(data: ConsultaInput):
                     )
             else:
                 # Legacy: usa la lógica original
-                # (horas_logisticas=None => 4/8 horas; o valor duro si viene en el JSON)
+                # (horas_logisticas=None => 2 horas; o valor duro si viene en el JSON)
                 resultado = _normalizar_total(_ejecutar_modelo(data.horas_logisticas))
 
         # Normalizar y convertir
