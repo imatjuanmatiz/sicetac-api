@@ -44,9 +44,9 @@ def calcular_modelo_sicetac_extendido(
         detalle[tipo] = {"km": km, "horas": hrs, "gal": gal}
 
     # --- 4. Horas logísticas ---
-    horas_log = horas_logisticas if horas_logisticas is not None else (4 if total_horas < 8 else 8)
+    horas_log = horas_logisticas if horas_logisticas is not None else (2 if total_horas < 8 else 2)
     horas_totales = total_horas + horas_log
-    recorridos = max(1, round(288 / horas_totales, 4))
+    recorridos = max(1, round(288 / horas_totales, 2))
 
     # --- 5. Costo fijo por carrocería ---
     tipo_carroceria_objetivo = carroceria_especial.upper().strip() if carroceria_especial else "GENERAL"
