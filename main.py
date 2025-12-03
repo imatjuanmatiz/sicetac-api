@@ -235,8 +235,8 @@ def calcular_sicetac(data: ConsultaInput):
             res_personalizado = None
             if data.horas_logisticas_personalizadas is not None:
                 horas_usuario = float(data.horas_logisticas_personalizadas)
-                horas_base = min(horas_usuario, 2.0)
-                horas_extra = max(horas_usuario - 2.0, 0.0)
+                horas_base = min(horas_usuario, 8.0)
+                horas_extra = max(horas_usuario - 8.0, 0.0)
 
                 # Ejecuta el modelo con máximo 2h logísticas "normales"
                 res_base = _normalizar_total(_ejecutar_modelo(horas_base))
