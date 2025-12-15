@@ -3,6 +3,13 @@ import numpy as np
 import math
 import unicodedata
 from depto_helper import DeptoHelper  # Si usas este helper en bloqueos
+from estadisticas_helper import (
+    obtener_evolucion_viajes_y_toneladas,
+    obtener_top_mercancias_ruta,
+    obtener_top_destinos,
+    obtener_top_origenes,
+    obtener_distribucion_vehiculos_ruta
+)
 
 # contexto_helper.py
 _modo_viaje_global = "CARGADO"
@@ -263,3 +270,12 @@ def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEP
         "fuente": "Datos proporcionados por Colfecar"
     }
     return limpiar_nan_json(resultado)
+    
+    def obtener_estadisticas_completas(origen, destino, cod_origen, cod_destino):
+    return {
+        "EVOLUCION_MENSUAL": obtener_evolucion_viajes_y_toneladas(origen, destino),
+        "TOP_MERCANCIAS": obtener_top_mercancias_ruta(origen, destino),
+        "TOP_DESTINOS_DESDE_ORIGEN": obtener_top_destinos(cod_origen),
+        "TOP_ORIGENES_HACIA_DESTINO": obtener_top_origenes(cod_destino),
+        "DISTRIBUCION_VEHICULOS": obtener_distribucion_vehiculos_ruta(origen, destino)
+    }
