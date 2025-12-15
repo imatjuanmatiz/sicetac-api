@@ -372,6 +372,16 @@ def calcular_sicetac(data: ConsultaInput):
         if escenarios_tiempos is not None:
             respuesta["MODO_TIEMPOS_LOGISTICOS"] = True
             respuesta["ESCENARIOS_TIEMPOS_LOGISTICOS"] = escenarios_tiempos
+   
+    # 🧠 Si se solicita contexto estadístico, se agrega
+    if data.contexto.strip().lower() == "sí":
+        respuesta["ESTADISTICAS"] = obtener_estadisticas_completas(
+            origen=data.origen,
+            destino=data.destino,
+            cod_origen=cod_origen,
+            cod_destino=cod_destino
+        )
+        
 
         return JSONResponse(content=respuesta)
 
