@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+tafrom fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pandas as pd
 from fastapi.responses import JSONResponse
@@ -42,13 +42,13 @@ class ConsultaInput(BaseModel):
     modo_viaje: str = "CARGADO"
     modo_tiempos_logisticos: bool = True
 
-    estadisticas: str = "Sí"
+    estadistica: str = "Sí"
 
 
 # =========================
-# NORMALIZAR CONTEXTO
+# NORMALIZAR ESTADISTICAS
 # =========================
-def contexto_activado(valor):
+def estadistica_activado(valor):
     if valor is None:
         return False
     return str(valor).strip().lower().replace("í", "i") in ["si", "sí", "true", "1"]
