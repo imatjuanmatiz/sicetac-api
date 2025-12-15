@@ -42,7 +42,7 @@ class ConsultaInput(BaseModel):
     modo_viaje: str = "CARGADO"
     modo_tiempos_logisticos: bool = True
 
-    contexto: str = "Sí"
+    estadisticas: str = "Sí"
 
 
 # =========================
@@ -140,9 +140,9 @@ def calcular_sicetac(data: ConsultaInput):
     }
 
     # =========================
-    # NIVEL 2 – CONTEXTO
+    # NIVEL 2 – ESTADISTICAS
     # =========================
-    if contexto_activado(data.contexto):
+    if estadistica_activado(data.estadistica):
 
         respuesta.update({
             "INDICADORES_ORIGEN": obtener_indicadores(cod_origen, vehiculo),
