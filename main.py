@@ -42,7 +42,7 @@ class ConsultaInput(BaseModel):
     modo_viaje: str = "CARGADO"
     modo_tiempos_logisticos: bool = True
 
-    contexto: str = "No"
+    contexto: str = "Sí"
 
 
 # =========================
