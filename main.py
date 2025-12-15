@@ -31,6 +31,7 @@ class ConsultaInput(BaseModel):
     mes: int = 202512
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
+    contexto: str = "No"  # ✅ NUEVO CAMPO: por defecto es "No"
 
     # LEGACY: sigue existiendo para no romper nada
     horas_logisticas: float | None = None  # override "duro" del modelo (antes)
