@@ -128,7 +128,7 @@ def calcular_sicetac(data: ConsultaInput):
     resultado = convertir_nativos(resultado)
 
     # =========================
-    # NIVEL 1 – SIEMPRE
+    # SICETAC
     # =========================
     llave_mercado = f"{cod_origen}-{cod_destino}-{vehiculo}"
     valor_mercado = obtener_valores_promedio_mercado_por_llave(llave_mercado)
@@ -140,11 +140,17 @@ def calcular_sicetac(data: ConsultaInput):
     }
 
     # =========================
-    # NIVEL 2 – ESTADISTICAS
+    #  ESTADISTICAS
     # =========================
     if estadistica_activado(data.estadistica):
 
         respuesta.update({
+            "ESTADISTICAS": obtener_estadisticas_completas(
+                origen=data.origen,
+                destino=data.destino,
+                cod_origen=cod_origen,
+                cod_destino=cod_destino
+            )
             "INDICADORES_ORIGEN": obtener_indicadores(cod_origen, vehiculo),
             "INDICADORES_DESTINO": obtener_indicadores(cod_destino, vehiculo),
             "COMPETITIVIDAD": evaluar_competitividad(cod_origen, cod_destino, vehiculo),
@@ -154,12 +160,7 @@ def calcular_sicetac(data: ConsultaInput):
             "MESES_INDICADORES_DESTINO": obtener_meses_disponibles_indicador(
                 df_indicadores, cod_destino, vehiculo
             ),
-            "ESTADISTICAS": obtener_estadisticas_completas(
-                origen=data.origen,
-                destino=data.destino,
-                cod_origen=cod_origen,
-                cod_destino=cod_destino
-            )
+            
         })
 
     return JSONResponse(content=respuesta)
