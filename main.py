@@ -26,7 +26,7 @@ class ConsultaInput(BaseModel):
     origen: str
     destino: str
     vehiculo: str = "C3S3"
-    mes: int = 202512
+    mes: int = 202601
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
 
