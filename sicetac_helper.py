@@ -1,6 +1,7 @@
 import pandas as pd
 from difflib import get_close_matches
 import logging
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,6 +25,21 @@ class SICETACHelper:
         ]
         self.codigo_municipio_col = "codigo_dane"
 
+    def _convertir_a_nativo(self, valor):
+        """
+        Convierte tipos de numpy a tipos nativos de Python.
+        Esto es crítico para la serialización JSON.
+        """
+        if isinstance(valor, (np.integer, np.int64, np.int32)):
+            return int(valor)
+        elif isinstance(valor, (np.floating, np.float64, np.float32)):
+            return float(valor)
+        elif isinstance(valor, np.bool_):
+            return bool(valor)
+        elif pd.isna(valor):
+            return None
+        return valor
+
     # -------------------------------------------------------------------------
     # BÚSQUEDA DE MUNICIPIOS
     # -------------------------------------------------------------------------
@@ -31,7 +47,7 @@ class SICETACHelper:
         """
         Busca un municipio por nombre (oficial o variaciones).
         Devuelve dict con:
-        - codigo_dane
+        - codigo_dane (int nativo, NO numpy)
         - departamento
         - nombre_oficial
         - (opcional) coincidencia_aproximada
@@ -44,6 +60,8 @@ class SICETACHelper:
             ["departamento", "nombre_oficial"],
         )
         if resultado:
+            # Convertir todos los valores a tipos nativos
+            resultado = {k: self._convertir_a_nativo(v) for k, v in resultado.items()}
             logging.info(f"✓ Municipio encontrado: {resultado}")
         else:
             logging.warning(f"✘ Municipio NO encontrado: {nombre_input}")
@@ -135,8 +153,8 @@ class SICETACHelper:
                 "destino_valido": destino_info is not None
             }
 
-        cod_origen = origen_info["codigo_dane"]
-        cod_destino = destino_info["codigo_dane"]
+        cod_origen = int(origen_info["codigo_dane"])
+        cod_destino = int(destino_info["codigo_dane"])
 
         # Buscar en ambos sentidos
         rutas_directas = df_rutas[
@@ -162,17 +180,20 @@ class SICETACHelper:
                 "mensaje": f"No existen rutas registradas en SICETAC entre {origen_info.get('nombre_oficial')} y {destino_info.get('nombre_oficial')}"
             }
 
-        # Convertir a lista de diccionarios
+        # Convertir a lista de diccionarios con tipos nativos
         lista_rutas = []
         for idx, row in todas_rutas.iterrows():
-            ruta_info = row.to_dict()
+            ruta_info = {}
+            for col in row.index:
+                ruta_info[col] = self._convertir_a_nativo(row[col])
+            
             # Agregar información adicional
             ruta_info["km_total"] = (
-                row.get("KM_PLANO", 0) +
-                row.get("KM_ONDULADO", 0) +
-                row.get("KM_MONTAÑOSO", 0) +
-                row.get("KM_URBANO", 0) +
-                row.get("KM_DESPAVIMENTADO", 0)
+                float(row.get("KM_PLANO", 0)) +
+                float(row.get("KM_ONDULADO", 0)) +
+                float(row.get("KM_MONTAÑOSO", 0)) +
+                float(row.get("KM_URBANO", 0)) +
+                float(row.get("KM_DESPAVIMENTADO", 0))
             )
             lista_rutas.append(ruta_info)
 
@@ -195,18 +216,25 @@ class SICETACHelper:
         Busca una ruta específica por su ID_SICE.
         Útil cuando el usuario quiere usar una ruta alternativa específica.
         """
-        ruta = df_rutas[df_rutas["ID_SICE"] == id_sice]
+        # Convertir id_sice a tipo apropiado
+        try:
+            id_sice_int = int(id_sice)
+            ruta = df_rutas[df_rutas["ID_SICE"] == id_sice_int]
+        except:
+            ruta = df_rutas[df_rutas["ID_SICE"] == id_sice]
         
         if ruta.empty:
             return None, {"error": f"No se encontró ruta con ID_SICE: {id_sice}"}
         
         fila = ruta.iloc[0]
+        
+        # Convertir valores a tipos nativos
         info = {
             "encontrada": True,
-            "id_sice": id_sice,
-            "origen": fila.get("codigo_dane_origen"),
-            "destino": fila.get("codigo_dane_destino"),
-            "km_total": (
+            "id_sice": self._convertir_a_nativo(fila.get("ID_SICE")),
+            "origen": self._convertir_a_nativo(fila.get("codigo_dane_origen")),
+            "destino": self._convertir_a_nativo(fila.get("codigo_dane_destino")),
+            "km_total": float(
                 fila.get("KM_PLANO", 0) +
                 fila.get("KM_ONDULADO", 0) +
                 fila.get("KM_MONTAÑOSO", 0) +
@@ -229,7 +257,7 @@ class SICETACHelper:
         
         Devuelve (fila_ruta, info_ruta), donde:
         - fila_ruta: row de df_rutas (primera ruta si hay múltiples) o None
-        - info_ruta: dict con información detallada
+        - info_ruta: dict con información detallada (tipos nativos Python)
         """
         info = {
             "origen_solicitado": origen_input,
@@ -260,8 +288,8 @@ class SICETACHelper:
             info["requiere_distancias_manuales"] = True
             return None, info
 
-        cod_origen = origen_info["codigo_dane"]
-        cod_destino = destino_info["codigo_dane"]
+        cod_origen = int(origen_info["codigo_dane"])
+        cod_destino = int(destino_info["codigo_dane"])
         
         info["codigo_origen_solicitado"] = cod_origen
         info["codigo_destino_solicitado"] = cod_destino
@@ -283,10 +311,12 @@ class SICETACHelper:
             return None, info
 
         # ✅ RUTA EXISTE
-        fila_principal = df_rutas[df_rutas["ID_SICE"] == lista_rutas[0]["ID_SICE"]].iloc[0]
+        # Buscar la fila completa en el DataFrame
+        id_sice = lista_rutas[0]["ID_SICE"]
+        fila_principal = df_rutas[df_rutas["ID_SICE"] == id_sice].iloc[0]
         
         info["ruta_encontrada"] = True
-        info["ruta_id"] = fila_principal["ID_SICE"]
+        info["ruta_id"] = self._convertir_a_nativo(id_sice)
         info["total_rutas_disponibles"] = len(lista_rutas)
         info["mensaje"] = f"Ruta encontrada en SICETAC: {info['nombre_origen']} → {info['nombre_destino']}"
 
@@ -295,13 +325,13 @@ class SICETACHelper:
             info["rutas_alternativas"] = []
             for ruta in lista_rutas[1:]:
                 info["rutas_alternativas"].append({
-                    "id_sice": ruta.get("ID_SICE"),
-                    "km_total": ruta.get("km_total"),
-                    "km_plano": ruta.get("KM_PLANO", 0),
-                    "km_ondulado": ruta.get("KM_ONDULADO", 0),
-                    "km_montañoso": ruta.get("KM_MONTAÑOSO", 0),
-                    "km_urbano": ruta.get("KM_URBANO", 0),
-                    "km_despavimentado": ruta.get("KM_DESPAVIMENTADO", 0)
+                    "id_sice": self._convertir_a_nativo(ruta.get("ID_SICE")),
+                    "km_total": float(ruta.get("km_total", 0)),
+                    "km_plano": float(ruta.get("KM_PLANO", 0)),
+                    "km_ondulado": float(ruta.get("KM_ONDULADO", 0)),
+                    "km_montañoso": float(ruta.get("KM_MONTAÑOSO", 0)),
+                    "km_urbano": float(ruta.get("KM_URBANO", 0)),
+                    "km_despavimentado": float(ruta.get("KM_DESPAVIMENTADO", 0))
                 })
             
             info["mensaje"] += f" (Se encontraron {len(lista_rutas)} rutas alternativas)"
@@ -334,10 +364,10 @@ class SICETACHelper:
         rutas_con_multiples = len(rutas_con_alternativas[rutas_con_alternativas > 1])
         
         return {
-            "total_registros_rutas": total_rutas,
-            "rutas_unicas": rutas_unicas,
+            "total_registros_rutas": int(total_rutas),
+            "rutas_unicas": int(rutas_unicas),
             "municipios_con_rutas": len(municipios_con_rutas),
             "total_municipios_db": len(self.df_municipios),
             "cobertura_pct": round(len(municipios_con_rutas) / len(self.df_municipios) * 100, 2),
-            "pares_con_multiples_rutas": rutas_con_multiples
+            "pares_con_multiples_rutas": int(rutas_con_multiples)
         }
