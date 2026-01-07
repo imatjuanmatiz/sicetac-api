@@ -271,7 +271,7 @@ def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEP
     }
     return limpiar_nan_json(resultado)
     
-    def obtener_estadisticas_completas(origen, destino, cod_origen, cod_destino):
+def obtener_estadisticas_completas(origen, destino, cod_origen, cod_destino):
     return {
         "EVOLUCION_MENSUAL": obtener_evolucion_viajes_y_toneladas(origen, destino),
         "TOP_MERCANCIAS": obtener_top_mercancias_ruta(origen, destino),
