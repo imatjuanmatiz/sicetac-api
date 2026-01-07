@@ -150,7 +150,7 @@ def calcular_sicetac(data: ConsultaInput):
                 destino=data.destino,
                 cod_origen=cod_origen,
                 cod_destino=cod_destino
-            )
+            ),
             "INDICADORES_ORIGEN": obtener_indicadores(cod_origen, vehiculo),
             "INDICADORES_DESTINO": obtener_indicadores(cod_destino, vehiculo),
             "COMPETITIVIDAD": evaluar_competitividad(cod_origen, cod_destino, vehiculo),
@@ -159,8 +159,7 @@ def calcular_sicetac(data: ConsultaInput):
             ),
             "MESES_INDICADORES_DESTINO": obtener_meses_disponibles_indicador(
                 df_indicadores, cod_destino, vehiculo
-            ),
-            
+            )
         })
 
     return JSONResponse(content=respuesta)
