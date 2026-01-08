@@ -1,57 +1,24 @@
 # contexto_helper.py
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+import logging
 import math
-import unicodedata
+import re
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
+
+logger = logging.getLogger("contexto_helper")
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Archivos esperados
 FILE_VALORES = "VALORES_CONSOLIDADOS_2025.xlsx"
-FILE_TIEMPOS = "indice_cargue_descargue_resumen_mensual.xlsx"
-FILE_COMPETITIVIDAD = "competitividad_rutas_2025.xlsx"
-FILE_CONFIG_VEH = "CONFIGURACION_VEHICULAR_LIMPIO.xlsx"
-
-_DF_CACHE: Dict[str, Optional[pd.DataFrame]] = {}
-_MAP_CACHE: Dict[str, Any] = {}
 
 
 def _path(name: str) -> Path:
     return BASE_DIR / name
-
-
-def _strip_accents(s: str) -> str:
-    return "".join(c for c in unicodedata.normalize("NFD", str(s)) if unicodedata.category(c) != "Mn")
-
-
-def _norm_col(c: Any) -> str:
-    c = str(c).strip().upper()
-    c = _strip_accents(c)
-    c = c.replace("\u00a0", " ")
-    c = " ".join(c.split())
-    return c
-
-
-def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df.columns = [_norm_col(c) for c in df.columns]
-    return df
-
-
-def _safe_read_excel(name: str) -> Optional[pd.DataFrame]:
-    if name in _DF_CACHE:
-        return _DF_CACHE[name]
-    p = _path(name)
-    if not p.exists():
-        _DF_CACHE[name] = None
-        return None
-    df = pd.read_excel(p)
-    df = _normalize_df(df)
-    _DF_CACHE[name] = df
-    return df
 
 
 def limpiar_nan_json(obj: Any) -> Any:
@@ -64,162 +31,90 @@ def limpiar_nan_json(obj: Any) -> Any:
     return obj
 
 
-# =========================
-# Mapeo config vehicular (C3S3 -> 3S3)
-# =========================
-def _get_mapeo_config() -> Dict[str, str]:
-    if "mapeo_config" in _MAP_CACHE:
-        return _MAP_CACHE["mapeo_config"]
-
-    df = _safe_read_excel(FILE_CONFIG_VEH)
-    if df is None:
-        _MAP_CACHE["mapeo_config"] = {}
-        return {}
-
-    if "TIPO_VEHICULO" not in df.columns or "CONFIGURACION_ANALISIS" not in df.columns:
-        _MAP_CACHE["mapeo_config"] = {}
-        return {}
-
-    x = df.copy()
-    x["TIPO_VEHICULO"] = x["TIPO_VEHICULO"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
-    x["CONFIGURACION_ANALISIS"] = x["CONFIGURACION_ANALISIS"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
-    m = dict(zip(x["TIPO_VEHICULO"], x["CONFIGURACION_ANALISIS"]))
-    _MAP_CACHE["mapeo_config"] = m
-    return m
-
-
-def traducir_config(config: str) -> str:
+def _to_number_currency(x):
     """
-    Retorna configuración para análisis/indicadores (sin C).
+    Convierte '$ 3,259,305' -> 3259305.0
     """
-    v = (config or "").strip().upper().replace(" ", "")
-    m = _get_mapeo_config()
-    if v in m:
-        return str(m[v]).strip().upper().replace(" ", "").replace("C", "")
-    # fallback
-    return v.replace("C", "")
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x).strip()
+    if s == "" or s.lower() in {"nan", "none", "null"}:
+        return None
+    s = re.sub(r"[^\d,.\-]", "", s)
+    if s.count(",") > 0 and s.count(".") == 0:
+        s = s.replace(",", "")
+    if s.count(".") > 1 and s.count(",") == 0:
+        s = s.replace(".", "")
+    try:
+        return float(s)
+    except Exception:
+        return None
 
 
-# =========================
-# 1) Valores promedio mercado por llave
-# =========================
+@lru_cache(maxsize=1)
+def _cargar_df_valores_safe() -> Optional[pd.DataFrame]:
+    """
+    Carga VALORES_CONSOLIDADOS_2025.xlsx una sola vez.
+    Si falla, retorna None (sin tumbar API).
+    """
+    try:
+        p = _path(FILE_VALORES)
+        if not p.exists():
+            logger.warning(f"⚠️ Archivo no disponible: {FILE_VALORES}")
+            return None
+
+        df = pd.read_excel(p)
+        df.columns = [str(c).strip().upper() for c in df.columns]
+
+        if "RUTA_CONFIGURACION" in df.columns:
+            df["RUTA_CONFIGURACION"] = df["RUTA_CONFIGURACION"].astype(str).str.upper().str.strip()
+
+        if "MES" in df.columns:
+            df["MES"] = pd.to_numeric(df["MES"], errors="coerce")
+
+        # Asegurar valor numérico consistente
+        if "VALOR_PROMEDIO_VALPAGADOS" in df.columns:
+            df["VALOR_PROMEDIO_VALPAGADOS_NUM"] = df["VALOR_PROMEDIO_VALPAGADOS"].apply(_to_number_currency)
+        else:
+            df["VALOR_PROMEDIO_VALPAGADOS_NUM"] = None
+
+        return df
+
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo cargar {FILE_VALORES}: {e}")
+        return None
+
+
 def obtener_valores_promedio_mercado_por_llave(ruta_config: str) -> List[Dict[str, Any]]:
-    df = _safe_read_excel(FILE_VALORES)
-    if df is None:
-        return [{"warning": f"Archivo no disponible: {FILE_VALORES}"}]
+    """
+    Busca por llave exacta en RUTA_CONFIGURACION.
+    Regla: llaves SIEMPRE con '-'
+    Ej: '11001000-13001000-3S3'
+
+    Devuelve serie:
+    [
+      {"MES": 202505, "VALOR_PROMEDIO_VALPAGADOS": 3259305.0},
+      ...
+    ]
+    """
+    df = _cargar_df_valores_safe()
+    if df is None or df.empty:
+        return []
 
     if "RUTA_CONFIGURACION" not in df.columns:
-        return [{"warning": f"Falta columna RUTA_CONFIGURACION en {FILE_VALORES}"}]
-
-    x = df.copy()
-    x["RUTA_CONFIGURACION"] = x["RUTA_CONFIGURACION"].astype(str).str.upper().str.strip()
+        return []
 
     llave = str(ruta_config).strip().upper()
-    dff = x[x["RUTA_CONFIGURACION"] == llave]
+    # ✅ No hacemos conversiones '_' <-> '-' porque tú definiste que SIEMPRE es '-'
+    dff = df[df["RUTA_CONFIGURACION"] == llave]
     if dff.empty:
         return []
 
-    # Orden por MES si existe
     if "MES" in dff.columns:
-        dff = dff.sort_values("MES")
+        dff = dff.dropna(subset=["MES"]).sort_values("MES")
 
-    # Devolver columnas relevantes
-    cols = [c for c in ["MES", "VALOR_PROMEDIO_VALPAGADOS", "VALOR_PROMEDIO_MERCADO"] if c in dff.columns]
-    if not cols:
-        return dff.head(50).to_dict(orient="records")
-
-    return limpiar_nan_json(dff[cols].to_dict(orient="records"))
-
-
-# =========================
-# 2) Indicadores (cargue/descargue)
-# =========================
-def obtener_indicadores(municipio_dane: Union[int, str], configuracion: str) -> Optional[Dict[str, Any]]:
-    df = _safe_read_excel(FILE_TIEMPOS)
-    if df is None:
-        return {"warning": f"Archivo no disponible: {FILE_TIEMPOS}"}
-
-    cfg = traducir_config(configuracion)
-
-    needed = {"CODIGO_OBJETIVO", "CONFIGURACION"}
-    if not needed.issubset(set(df.columns)):
-        return {"warning": f"Faltan columnas en {FILE_TIEMPOS}: {sorted(list(needed - set(df.columns)))}"}
-
-    x = df.copy()
-    x["CONFIGURACION"] = x["CONFIGURACION"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
-
-    filt = (x["CODIGO_OBJETIVO"] == int(municipio_dane)) & (x["CONFIGURACION"] == str(cfg).upper())
-    dff = x[filt]
-    if dff.empty:
-        return None
-
-    fila = dff.iloc[0].to_dict()
-    return limpiar_nan_json(fila)
-
-
-# =========================
-# 3) Competitividad por ruta 2025
-# =========================
-def evaluar_competitividad(origen: Union[int, str], destino: Union[int, str], configuracion: str) -> Optional[Dict[str, Any]]:
-    df = _safe_read_excel(FILE_COMPETITIVIDAD)
-    if df is None:
-        return {"warning": f"Archivo no disponible: {FILE_COMPETITIVIDAD}"}
-
-    cfg = traducir_config(configuracion)
-
-    needed = {"CODIGO_ORIGEN", "CODIGO_DESTINO", "CONFIGURACION"}
-    if not needed.issubset(set(df.columns)):
-        return {"warning": f"Faltan columnas en {FILE_COMPETITIVIDAD}: {sorted(list(needed - set(df.columns)))}"}
-
-    x = df.copy()
-    x["CONFIGURACION"] = x["CONFIGURACION"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
-
-    dff = x[
-        (x["CODIGO_ORIGEN"] == int(origen)) &
-        (x["CODIGO_DESTINO"] == int(destino)) &
-        (x["CONFIGURACION"] == str(cfg).upper())
-    ]
-    if dff.empty:
-        return None
-    return limpiar_nan_json(dff.iloc[0].to_dict())
-
-
-# =========================
-# 4) Meses disponibles (flexible)
-# =========================
-def obtener_meses_disponibles_indicador(
-    df: Optional[pd.DataFrame],
-    codigo_objetivo: Union[int, str],
-    configuracion: str
-) -> List[int]:
-    if df is None:
-        df = _safe_read_excel(FILE_TIEMPOS)
-    if df is None:
-        return []
-
-    cfg = traducir_config(configuracion)
-
-    # Detectar columna mes
-    col_mes = None
-    for cand in ["ANOMES", "AÑOMES", "AÑO MES", "MES"]:
-        c = _norm_col(cand)
-        if c in df.columns:
-            col_mes = c
-            break
-    if not col_mes:
-        return []
-
-    x = df.copy()
-    if "CODIGO_OBJETIVO" in x.columns:
-        x = x[x["CODIGO_OBJETIVO"] == int(codigo_objetivo)]
-    if "CONFIGURACION" in x.columns:
-        x["CONFIGURACION"] = x["CONFIGURACION"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
-        x = x[x["CONFIGURACION"] == str(cfg).upper()]
-
-    meses = []
-    for v in x[col_mes].dropna().unique().tolist():
-        try:
-            meses.append(int(str(v).strip()))
-        except Exception:
-            pass
-    return sorted(list(set(meses)))
+    out = dff[["MES", "VALOR_PROMEDIO_VALPAGADOS_NUM"]].copy()
+    out = out.rename(columns={"VALOR_PROMEDIO_VALPAGADOS_NUM": "VALOR_PROMEDIO_VALPAGADOS"})
+    return limpiar_nan_json(out.to_dict(orient="records"))

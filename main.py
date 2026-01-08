@@ -1,42 +1,49 @@
-from fastapi import FastAPI, HTTPException, Query, Response
-from pydantic import BaseModel
+from __future__ import annotations
+
+from fastapi import FastAPI, HTTPException, Query, Response, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import pandas as pd
 import logging
-import re
-from functools import lru_cache
-
-logger = logging.getLogger("api")
 
 from sicetac_helper import SICETACHelper
-
-# Modelos separados: CARGADO y VACIO
 from modelo_sicetac import calcular_modelo_sicetac_extendido
 from modelo_sicetac_vacio import calcular_modelo_sicetac_extendido_vacio
 
+from mercado_helper import obtener_serie_mercado_rndc, traducir_config_a_analisis
+
+logger = logging.getLogger("api")
 
 # =========================
 # APP
 # =========================
 app = FastAPI(
-    title="API SICETAC",
+    title="API SICETAC (ATICA)",
     version="2.1.5",
     description=(
         "API para cálculo de costos SICETAC en Colombia. "
         "Por defecto usa origen+destino (id_ruta solo si se envía explícitamente). "
-        "Calcula escenarios 0/2/8 horas logísticas y retorna Mercado RNDC. "
+        "Calcula escenarios 0/2/8 horas logísticas y retorna Mercado RNDC (si está disponible). "
         "Estadísticas y contexto avanzado se dejan fuera por ahora."
     ),
 )
+
+# Handler global (para que los 500 digan qué pasó en Render)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("❌ Error no controlado en API")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Error interno: {type(exc).__name__}: {str(exc)}"},
+    )
 
 # =========================
 # INPUT
 # =========================
 class ConsultaInput(BaseModel):
-    # Por defecto vacío (None). Solo si el usuario lo da explícitamente se usa.
+    # Solo si el usuario lo da explícitamente se usa.
     id_ruta: str | None = None
 
-    # Se usan si NO hay id_ruta válido
     origen: str | None = None
     destino: str | None = None
 
@@ -45,7 +52,6 @@ class ConsultaInput(BaseModel):
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
 
-    # Overrides manuales de distancias (si se suministran > 0)
     km_plano: float = 0
     km_ondulado: float = 0
     km_montañoso: float = 0
@@ -65,11 +71,11 @@ ARCHIVOS = {
     "costos_fijos": "COSTO_FIJO_ACTUALIZADO.xlsx",
     "peajes": "PEAJES_LIMPIO.xlsx",
     "rutas": "RUTA_DISTANCIA_LIMPIO.xlsx",
-    "valores_mercado": "VALORES_CONSOLIDADOS_2025.xlsx",
 }
 
 helper = SICETACHelper(ARCHIVOS["municipios"])
 
+# Cargar matrices SICETAC (core)
 df_vehiculos = pd.read_excel(ARCHIVOS["vehiculos"])
 df_parametros = pd.read_excel(ARCHIVOS["parametros"])
 df_costos_fijos = pd.read_excel(ARCHIVOS["costos_fijos"])
@@ -113,27 +119,6 @@ def convertir_nativos(obj):
         pass
     return obj
 
-def _to_number_currency(x):
-    """
-    Convierte '$ 3,259,305' -> 3259305.0
-    """
-    if x is None:
-        return None
-    if isinstance(x, (int, float)):
-        return float(x)
-    s = str(x).strip()
-    if s == "" or s.lower() in {"nan", "none", "null"}:
-        return None
-    s = re.sub(r"[^\d,.\-]", "", s)
-    if s.count(",") > 0 and s.count(".") == 0:
-        s = s.replace(",", "")
-    if s.count(".") > 1 and s.count(",") == 0:
-        s = s.replace(".", "")
-    try:
-        return float(s)
-    except Exception:
-        return None
-
 def _sum_km(dist_dict: dict) -> float:
     return float(
         (dist_dict.get("km_plano") or 0)
@@ -153,35 +138,6 @@ def _safe_total_viaje(res: dict) -> float | None:
             except Exception:
                 return None
     return None
-
-def traducir_vehiculo_a_stats(vehiculo_sicetac: str) -> str:
-    """
-    Traduce vehículo SICETAC (ej: C3S3) a CONFIGURACION_ANALISIS (sin C, ej: 3S3)
-    usando CONFIGURACION_VEHICULAR_LIMPIO.xlsx.
-    Fallback: quita 'C'.
-    """
-    v = (vehiculo_sicetac or "").strip().upper().replace(" ", "")
-    if df_vehiculos is None or df_vehiculos.empty:
-        return v.replace("C", "")
-
-    tmp = df_vehiculos.copy()
-    tmp.columns = [str(c).strip().upper() for c in tmp.columns]
-
-    if "TIPO_VEHICULO" not in tmp.columns or "CONFIGURACION_ANALISIS" not in tmp.columns:
-        return v.replace("C", "")
-
-    tmp["TIPO_VEHICULO"] = (
-        tmp["TIPO_VEHICULO"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
-    )
-    tmp["CONFIGURACION_ANALISIS"] = (
-        tmp["CONFIGURACION_ANALISIS"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
-    )
-
-    hit = tmp[tmp["TIPO_VEHICULO"] == v]
-    if hit.empty:
-        return v.replace("C", "")
-
-    return str(hit.iloc[0]["CONFIGURACION_ANALISIS"]).strip().upper().replace(" ", "").replace("C", "")
 
 def _build_info_ruta_uniforme(
     *,
@@ -205,55 +161,7 @@ def _build_info_ruta_uniforme(
 
 
 # =========================
-# MERCADO RNDC (desde VALORES_CONSOLIDADOS_2025.xlsx)
-# =========================
-@lru_cache(maxsize=1)
-def _cargar_df_mercado():
-    df = pd.read_excel(ARCHIVOS["valores_mercado"])
-    df.columns = [str(c).strip().upper() for c in df.columns]
-
-    # Normalizaciones clave
-    for col in ["RUTA_ANALISIS", "CONFIGURACION_ANALISIS"]:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip().str.upper()
-
-    if "MES" in df.columns:
-        df["MES"] = pd.to_numeric(df["MES"], errors="coerce")
-
-    # Campo que necesitas (tu prioridad)
-    if "VALOR_PROMEDIO_VALPAGADOS" in df.columns:
-        df["VALOR_PROMEDIO_VALPAGADOS_NUM"] = df["VALOR_PROMEDIO_VALPAGADOS"].apply(_to_number_currency)
-    else:
-        df["VALOR_PROMEDIO_VALPAGADOS_NUM"] = None
-
-    return df
-
-def obtener_mercado_rndc(cod_origen: int, cod_destino: int, vehiculo_sicetac: str) -> list[dict]:
-    """
-    Devuelve serie mensual por ruta+vehículo usando:
-    RUTA_ANALISIS = '11001000-13001000'
-    CONFIGURACION_ANALISIS = '3S3' (sin C)
-    """
-    ruta = f"{int(cod_origen)}-{int(cod_destino)}"
-    config = traducir_vehiculo_a_stats(vehiculo_sicetac)
-
-    df = _cargar_df_mercado()
-    requeridas = {"RUTA_ANALISIS", "CONFIGURACION_ANALISIS", "MES", "VALOR_PROMEDIO_VALPAGADOS_NUM"}
-    if not requeridas.issubset(set(df.columns)):
-        return []
-
-    sub = df[(df["RUTA_ANALISIS"] == ruta) & (df["CONFIGURACION_ANALISIS"] == config)]
-    if sub.empty:
-        return []
-
-    sub = sub.dropna(subset=["MES"]).sort_values("MES")
-    out = sub[["MES", "VALOR_PROMEDIO_VALPAGADOS_NUM"]].copy()
-    out = out.rename(columns={"VALOR_PROMEDIO_VALPAGADOS_NUM": "VALOR_PROMEDIO_VALPAGADOS"})
-    return out.to_dict(orient="records")
-
-
-# =========================
-# ENDPOINTS: RUTAS
+# ENDPOINTS
 # =========================
 @app.get("/rutas/disponibles")
 def listar_rutas_disponibles(
@@ -316,9 +224,6 @@ def obtener_ruta_por_id(id_ruta: str):
     )
 
 
-# =========================
-# ENDPOINT: CONSULTA
-# =========================
 @app.post("/consulta")
 def calcular_sicetac(data: ConsultaInput):
     id_ruta = _clean_optional_str(data.id_ruta)
@@ -330,7 +235,7 @@ def calcular_sicetac(data: ConsultaInput):
         raise HTTPException(status_code=400, detail="modo_viaje inválido. Use 'CARGADO' o 'VACIO'.")
 
     vehiculo_sicetac = (_clean_optional_str(data.vehiculo) or "C3S3").strip().upper().replace(" ", "")
-    vehiculo_stats = traducir_vehiculo_a_stats(vehiculo_sicetac)
+    vehiculo_stats = traducir_config_a_analisis(vehiculo_sicetac)
 
     # 1) Resolver ruta
     fila_ruta = None
@@ -379,48 +284,43 @@ def calcular_sicetac(data: ConsultaInput):
     escenarios = {"0_horas": 0, "2_horas": 2, "8_horas": 8}
     resultados_escenarios: dict = {}
 
-    try:
-        for nombre, horas in escenarios.items():
-            if modo_viaje == "VACIO":
-                res = calcular_modelo_sicetac_extendido_vacio(
-                    origen=origen,
-                    destino=destino,
-                    configuracion=vehiculo_sicetac,
-                    serie=data.mes,
-                    distancias=distancias_modelo,
-                    valor_peaje_manual=float(data.valor_peaje_manual or 0),
-                    matriz_parametros=df_parametros,
-                    matriz_costos_fijos=df_costos_fijos,
-                    matriz_vehicular=df_vehiculos,
-                    rutas_df=df_rutas,
-                    peajes_df=df_peajes,
-                    carroceria_especial=data.carroceria,
-                    ruta_oficial=fila_ruta,
-                    horas_logisticas=horas,
-                )
-            else:
-                res = calcular_modelo_sicetac_extendido(
-                    origen=origen,
-                    destino=destino,
-                    configuracion=vehiculo_sicetac,
-                    serie=data.mes,
-                    distancias=distancias_modelo,
-                    valor_peaje_manual=float(data.valor_peaje_manual or 0),
-                    matriz_parametros=df_parametros,
-                    matriz_costos_fijos=df_costos_fijos,
-                    matriz_vehicular=df_vehiculos,
-                    rutas_df=df_rutas,
-                    peajes_df=df_peajes,
-                    carroceria_especial=data.carroceria,
-                    ruta_oficial=fila_ruta,
-                    horas_logisticas=horas,
-                )
+    for nombre, horas in escenarios.items():
+        if modo_viaje == "VACIO":
+            res = calcular_modelo_sicetac_extendido_vacio(
+                origen=origen,
+                destino=destino,
+                configuracion=vehiculo_sicetac,
+                serie=data.mes,
+                distancias=distancias_modelo,
+                valor_peaje_manual=float(data.valor_peaje_manual or 0),
+                matriz_parametros=df_parametros,
+                matriz_costos_fijos=df_costos_fijos,
+                matriz_vehicular=df_vehiculos,
+                rutas_df=df_rutas,
+                peajes_df=df_peajes,
+                carroceria_especial=data.carroceria,
+                ruta_oficial=fila_ruta,
+                horas_logisticas=horas,
+            )
+        else:
+            res = calcular_modelo_sicetac_extendido(
+                origen=origen,
+                destino=destino,
+                configuracion=vehiculo_sicetac,
+                serie=data.mes,
+                distancias=distancias_modelo,
+                valor_peaje_manual=float(data.valor_peaje_manual or 0),
+                matriz_parametros=df_parametros,
+                matriz_costos_fijos=df_costos_fijos,
+                matriz_vehicular=df_vehiculos,
+                rutas_df=df_rutas,
+                peajes_df=df_peajes,
+                carroceria_especial=data.carroceria,
+                ruta_oficial=fila_ruta,
+                horas_logisticas=horas,
+            )
 
-            resultados_escenarios[nombre] = convertir_nativos(res)
-
-    except Exception as e:
-        logger.exception("Fallo cálculo SICETAC por escenarios")
-        raise HTTPException(status_code=500, detail=f"Error calculando SICETAC (escenarios): {str(e)}")
+        resultados_escenarios[nombre] = convertir_nativos(res)
 
     t0 = _safe_total_viaje(resultados_escenarios.get("0_horas", {}))
     t2 = _safe_total_viaje(resultados_escenarios.get("2_horas", {}))
@@ -438,11 +338,8 @@ def calcular_sicetac(data: ConsultaInput):
     # Principal por compatibilidad: el escenario 2 horas
     sicetac_principal = resultados_escenarios.get("2_horas") or resultados_escenarios.get("0_horas")
 
-    # 5) Mercado RNDC (tu prioridad)
-    try:
-        valor_mercado = obtener_mercado_rndc(cod_origen, cod_destino, vehiculo_sicetac)
-    except Exception:
-        valor_mercado = []
+    # 5) Mercado RNDC (NO puede tumbar SICETAC)
+    valor_mercado = obtener_serie_mercado_rndc(cod_origen, cod_destino, vehiculo_sicetac)
 
     # 6) INFO_RUTA (mensaje simple)
     ruta_id_usada = id_ruta if metodo_busqueda == "directo_por_id" else info_ruta.get("id_principal")
@@ -470,18 +367,18 @@ def calcular_sicetac(data: ConsultaInput):
         recomendacion=recomendacion,
     )
 
-    respuesta = {
-        "SICETAC": sicetac_principal,
-        "SICETAC_ESCENARIOS": resultados_escenarios,
-        "COMPARATIVO_HORAS": comparativo,
-        "MODO_VIAJE": modo_viaje,
-        "INFO_RUTA": info_ruta_uniforme,
-        "VALOR_MERCADO_RNDC": valor_mercado,  # ✅ lo único de “contexto” que queda
-        "CODIGOS": {"origen": cod_origen, "destino": cod_destino},
-        "VEHICULO": {"sicetac": vehiculo_sicetac, "analisis": vehiculo_stats},
-    }
-
-    return JSONResponse(content=respuesta)
+    return JSONResponse(
+        content={
+            "SICETAC": sicetac_principal,
+            "SICETAC_ESCENARIOS": resultados_escenarios,
+            "COMPARATIVO_HORAS": comparativo,
+            "MODO_VIAJE": modo_viaje,
+            "INFO_RUTA": info_ruta_uniforme,
+            "VALOR_MERCADO_RNDC": valor_mercado,  # ✅ si no hay, []
+            "CODIGOS": {"origen": cod_origen, "destino": cod_destino},
+            "VEHICULO": {"sicetac": vehiculo_sicetac, "analisis": vehiculo_stats},
+        }
+    )
 
 
 # =========================
