@@ -1,8 +1,7 @@
 from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel
-import pandas as pd
-
 from fastapi.responses import JSONResponse
+import pandas as pd
 import logging
 
 logger = logging.getLogger("api")
@@ -23,15 +22,19 @@ from estadisticas_helper import obtener_estadisticas_completas
 # =========================
 # APP
 # =========================
-app = FastAPI(title="API SICETAC", version="2.1.0")
+app = FastAPI(title="API SICETAC", version="2.1.1")
+
 
 # =========================
-# MODELO INPUT
+# INPUT
 # =========================
 class ConsultaInput(BaseModel):
+    # Por defecto, vacío (None). Solo si el usuario lo entrega explícitamente se usa.
+    id_ruta: str | None = None
+
+    # Solo se usan si NO hay id_ruta válido
     origen: str | None = None
     destino: str | None = None
-    id_ruta: str | None = None
 
     vehiculo: str = "C3S3"
     mes: int = 202601
@@ -50,7 +53,7 @@ class ConsultaInput(BaseModel):
 
 
 # =========================
-# CARGA BASE
+# ARCHIVOS
 # =========================
 ARCHIVOS = {
     "municipios": "municipios.xlsx",
@@ -71,9 +74,24 @@ df_rutas = pd.read_excel(ARCHIVOS["rutas"])
 
 
 # =========================
-# UTIL
+# UTILS
 # =========================
-def estadistica_activado(valor):
+def _clean_optional_str(x: str | None) -> str | None:
+    """
+    Convierte strings vacíos/ruidosos en None:
+      "", "   ", "null", "none", "nan" -> None
+    """
+    if x is None:
+        return None
+    s = str(x).strip()
+    if s == "":
+        return None
+    if s.lower() in {"null", "none", "nan"}:
+        return None
+    return s
+
+
+def estadistica_activado(valor) -> bool:
     if valor is None:
         return False
     return str(valor).strip().lower().replace("í", "i") in ["si", "sí", "true", "1"]
@@ -130,17 +148,24 @@ def obtener_nombre_ruta(fila_ruta):
     if fila_ruta is None:
         return "Ruta no especificada"
 
-    km_plano = float(fila_ruta.get("KM_PLANO", 0))
-    km_ondulado = float(fila_ruta.get("KM_ONDULADO", 0))
-    km_montañoso = float(fila_ruta.get("KM_MONTAÑOSO", 0))
-    km_urbano = float(fila_ruta.get("KM_URBANO", 0))
-    km_despav = float(fila_ruta.get("KM_DESPAVIMENTADO", 0))
+    km_plano = float(fila_ruta.get("KM_PLANO", 0) or 0)
+    km_ondulado = float(fila_ruta.get("KM_ONDULADO", 0) or 0)
+    km_montañoso = float(fila_ruta.get("KM_MONTAÑOSO", 0) or 0)
+    km_urbano = float(fila_ruta.get("KM_URBANO", 0) or 0)
+    km_despav = float(fila_ruta.get("KM_DESPAVIMENTADO", 0) or 0)
 
     return (
         f"Plano: {km_plano} km | Ondulado: {km_ondulado} km | "
         f"Montañoso: {km_montañoso} km | Urbano: {km_urbano} km | "
         f"Despavimentado: {km_despav} km"
     )
+
+
+def _first_not_none(*vals):
+    for v in vals:
+        if v is not None and v != "":
+            return v
+    return None
 
 
 # =========================
@@ -151,6 +176,12 @@ def listar_rutas_disponibles(
     origen: str = Query(..., description="Nombre municipio origen"),
     destino: str = Query(..., description="Nombre municipio destino"),
 ):
+    origen = _clean_optional_str(origen)
+    destino = _clean_optional_str(destino)
+
+    if not origen or not destino:
+        raise HTTPException(status_code=400, detail="Debe enviar origen y destino válidos.")
+
     lista_rutas, info = helper.buscar_todas_las_rutas(origen, destino, df_rutas)
 
     if not lista_rutas:
@@ -170,22 +201,26 @@ def listar_rutas_disponibles(
 
 @app.get("/ruta/{id_ruta}")
 def obtener_ruta_por_id(id_ruta: str):
+    id_ruta = _clean_optional_str(id_ruta)
+    if not id_ruta:
+        raise HTTPException(status_code=400, detail="id_ruta inválido.")
+
     fila_ruta, info = helper.buscar_ruta_por_id(id_ruta, df_rutas)
 
     if fila_ruta is None:
         raise HTTPException(status_code=404, detail=info.get("error"))
 
-    origen_muni = helper.obtener_municipio_por_codigo(info["origen"])
-    destino_muni = helper.obtener_municipio_por_codigo(info["destino"])
+    origen_muni = helper.obtener_municipio_por_codigo(info.get("origen"))
+    destino_muni = helper.obtener_municipio_por_codigo(info.get("destino"))
 
     return JSONResponse(content={
-        "id_ruta": info["id_sice"],
+        "id_ruta": info.get("id_sice"),
         "origen": {
-            "codigo": info["origen"],
+            "codigo": info.get("origen"),
             "nombre": (origen_muni or {}).get("nombre_oficial")
         },
         "destino": {
-            "codigo": info["destino"],
+            "codigo": info.get("destino"),
             "nombre": (destino_muni or {}).get("nombre_oficial")
         },
         "ruta": info.get("ruta"),
@@ -201,48 +236,74 @@ def obtener_ruta_por_id(id_ruta: str):
 @app.post("/consulta")
 def calcular_sicetac(data: ConsultaInput):
     # -------------------------
-    # 0) Normalización base
+    # 0) Normalización de inputs
     # -------------------------
-    vehiculo_sicetac = (data.vehiculo or "C3S3").strip().upper().replace(" ", "")
+    id_ruta = _clean_optional_str(data.id_ruta)
+    origen = _clean_optional_str(data.origen)
+    destino = _clean_optional_str(data.destino)
+
+    vehiculo_sicetac = _clean_optional_str(data.vehiculo) or "C3S3"
+    vehiculo_sicetac = vehiculo_sicetac.strip().upper().replace(" ", "")
     vehiculo_stats = traducir_vehiculo_a_stats(vehiculo_sicetac)
 
     # -------------------------
-    # 1) Resolver ruta principal (por id_ruta o por origen/destino)
+    # 1) Resolver ruta (SOLO usa ID si viene explícito y válido)
     # -------------------------
     fila_ruta = None
     info_ruta = {}
 
-    if data.id_ruta:
-        fila_ruta, info_ruta = helper.buscar_ruta_por_id(data.id_ruta, df_rutas)
+    if id_ruta:
+        fila_ruta, info_ruta = helper.buscar_ruta_por_id(id_ruta, df_rutas)
         if fila_ruta is None:
             raise HTTPException(status_code=404, detail=info_ruta.get("error", "No se encontró la ruta por ID"))
     else:
-        if not data.origen or not data.destino:
-            raise HTTPException(status_code=400, detail="Debe enviar 'origen' y 'destino' o 'id_ruta'.")
-
-        fila_ruta, info_ruta = helper.buscar_ruta(data.origen, data.destino, df_rutas)
+        if not origen or not destino:
+            raise HTTPException(status_code=400, detail="Debe enviar 'origen' y 'destino' o un 'id_ruta' válido.")
+        fila_ruta, info_ruta = helper.buscar_ruta(origen, destino, df_rutas)
         if fila_ruta is None:
             raise HTTPException(status_code=404, detail=info_ruta.get("error", "No se encontró ruta para origen/destino."))
 
     # -------------------------
-    # 2) Extraer códigos origen/destino
+    # 2) Extraer códigos origen/destino (robusto)
     # -------------------------
-    cod_origen = int(info_ruta.get("detalle_busqueda_id", {}).get("origen") or info_ruta.get("detalle_rutas", {}).get("origen"))
-    cod_destino = int(info_ruta.get("detalle_busqueda_id", {}).get("destino") or info_ruta.get("detalle_rutas", {}).get("destino"))
+    if id_ruta:
+        # buscar_ruta_por_id devuelve origen/destino directo en info_ruta
+        cod_origen_raw = info_ruta.get("origen")
+        cod_destino_raw = info_ruta.get("destino")
+    else:
+        # buscar_ruta devuelve dict con detalle_rutas/detalle_busqueda_id
+        cod_origen_raw = _first_not_none(
+            (info_ruta.get("detalle_busqueda_id") or {}).get("origen"),
+            (info_ruta.get("detalle_rutas") or {}).get("origen"),
+        )
+        cod_destino_raw = _first_not_none(
+            (info_ruta.get("detalle_busqueda_id") or {}).get("destino"),
+            (info_ruta.get("detalle_rutas") or {}).get("destino"),
+        )
 
-    # si no existen por algún motivo (seguridad)
-    if not cod_origen or not cod_destino:
-        raise HTTPException(status_code=500, detail="No se pudieron resolver códigos DANE de origen/destino desde la ruta.")
+    if cod_origen_raw is None or cod_destino_raw is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "No se pudieron resolver códigos DANE de origen/destino desde la ruta.",
+                "id_ruta_usado": id_ruta,
+                "info_ruta_keys": list(info_ruta.keys()),
+                "info_ruta": info_ruta,
+            },
+        )
+
+    cod_origen = int(cod_origen_raw)
+    cod_destino = int(cod_destino_raw)
 
     # -------------------------
-    # 3) Construir distancias (usa fila_ruta + posibilidad de override manual)
+    # 3) Distancias (fila_ruta + override manual)
     # -------------------------
     distancias = {
-        "KM_PLANO": float(getattr(data, "km_plano", 0) or 0) if float(getattr(data, "km_plano", 0) or 0) > 0 else float(fila_ruta.get("KM_PLANO", 0)),
-        "KM_ONDULADO": float(getattr(data, "km_ondulado", 0) or 0) if float(getattr(data, "km_ondulado", 0) or 0) > 0 else float(fila_ruta.get("KM_ONDULADO", 0)),
-        "KM_MONTAÑOSO": float(getattr(data, "km_montañoso", 0) or 0) if float(getattr(data, "km_montañoso", 0) or 0) > 0 else float(fila_ruta.get("KM_MONTAÑOSO", 0)),
-        "KM_URBANO": float(getattr(data, "km_urbano", 0) or 0) if float(getattr(data, "km_urbano", 0) or 0) > 0 else float(fila_ruta.get("KM_URBANO", 0)),
-        "KM_DESPAVIMENTADO": float(getattr(data, "km_despavimentado", 0) or 0) if float(getattr(data, "km_despavimentado", 0) or 0) > 0 else float(fila_ruta.get("KM_DESPAVIMENTADO", 0)),
+        "KM_PLANO": float(data.km_plano or 0) if float(data.km_plano or 0) > 0 else float(fila_ruta.get("KM_PLANO", 0) or 0),
+        "KM_ONDULADO": float(data.km_ondulado or 0) if float(data.km_ondulado or 0) > 0 else float(fila_ruta.get("KM_ONDULADO", 0) or 0),
+        "KM_MONTAÑOSO": float(data.km_montañoso or 0) if float(data.km_montañoso or 0) > 0 else float(fila_ruta.get("KM_MONTAÑOSO", 0) or 0),
+        "KM_URBANO": float(data.km_urbano or 0) if float(data.km_urbano or 0) > 0 else float(fila_ruta.get("KM_URBANO", 0) or 0),
+        "KM_DESPAVIMENTADO": float(data.km_despavimentado or 0) if float(data.km_despavimentado or 0) > 0 else float(fila_ruta.get("KM_DESPAVIMENTADO", 0) or 0),
     }
 
     # -------------------------
@@ -250,8 +311,8 @@ def calcular_sicetac(data: ConsultaInput):
     # -------------------------
     try:
         resultado = calcular_modelo_sicetac_extendido(
-            origen=data.origen,
-            destino=data.destino,
+            origen=origen,                     # puede ser None si usaste id_ruta; modelo debe tolerarlo o ignorarlo
+            destino=destino,                   # idem
             configuracion=vehiculo_sicetac,
             serie=data.mes,
             distancias=distancias,
@@ -276,7 +337,6 @@ def calcular_sicetac(data: ConsultaInput):
     # -------------------------
     valor_mercado = []
     try:
-        # ruta_configuración típica: "11001000-76001000_3S3" (según tu diseño previo)
         ruta_config = f"{cod_origen}-{cod_destino}_{vehiculo_stats}"
         valor_mercado = obtener_valores_promedio_mercado_por_llave(ruta_config)
     except Exception:
@@ -285,40 +345,39 @@ def calcular_sicetac(data: ConsultaInput):
     # -------------------------
     # 4.2) Info ruta para respuesta
     # -------------------------
-    info_ruta_response = {
-        "ruta_principal": info_ruta.get("ruta_principal"),
-        "rutas_alternativas": info_ruta.get("rutas_alternativas", []),
-        "detalle": info_ruta.get("detalle_rutas") or info_ruta.get("detalle_busqueda_id"),
-        "distancias_descriptivas": obtener_nombre_ruta(fila_ruta),
-    }
+    if id_ruta:
+        info_ruta_response = {
+            "id_ruta_usado": id_ruta,
+            "distancias_descriptivas": obtener_nombre_ruta(fila_ruta),
+            "detalle": info_ruta,
+        }
+    else:
+        info_ruta_response = {
+            "ruta_principal": info_ruta.get("ruta_principal"),
+            "rutas_alternativas": info_ruta.get("rutas_alternativas", []),
+            "detalle": info_ruta.get("detalle_rutas") or info_ruta.get("detalle_busqueda_id"),
+            "distancias_descriptivas": obtener_nombre_ruta(fila_ruta),
+        }
 
     respuesta = {
         "SICETAC": resultado,
         "MODO_VIAJE": data.modo_viaje,
         "VALOR_MERCADO_RNDC": valor_mercado,
         "INFO_RUTA": info_ruta_response,
-        "VEHICULO": {
-            "sicetac": vehiculo_sicetac,
-            "estadisticas": vehiculo_stats
-        }
+        "CODIGOS": {"origen": cod_origen, "destino": cod_destino},
+        "VEHICULO": {"sicetac": vehiculo_sicetac, "estadisticas": vehiculo_stats},
     }
 
     # -------------------------
-    # 5) Estadísticas y Contexto (SEPARADOS)
+    # 5) Estadísticas y Contexto (SEPARADOS y a prueba de fallos)
     # -------------------------
     if estadistica_activado(data.estadistica):
         # 1) ESTADISTICAS (consolidados por ruta)
         try:
-            respuesta["ESTADISTICAS"] = obtener_estadisticas_completas(
-                cod_origen,
-                cod_destino
-            )
+            respuesta["ESTADISTICAS"] = obtener_estadisticas_completas(cod_origen, cod_destino)
         except Exception as e:
             logger.exception("Fallo en estadisticas_helper")
-            respuesta["ESTADISTICAS"] = {
-                "warning": "No se pudieron generar estadísticas",
-                "error": str(e)
-            }
+            respuesta["ESTADISTICAS"] = {"warning": "No se pudieron generar estadísticas", "error": str(e)}
 
         # 2) CONTEXTO (indicadores + competitividad) - usa vehiculo_stats (sin C)
         try:
@@ -331,16 +390,14 @@ def calcular_sicetac(data: ConsultaInput):
             }
         except Exception as e:
             logger.exception("Fallo en contexto_helper")
-            respuesta["CONTEXTO"] = {
-                "warning": "No se pudo generar contexto",
-                "error": str(e),
-                "vehiculo_stats": vehiculo_stats
-            }
+            respuesta["CONTEXTO"] = {"warning": "No se pudo generar contexto", "error": str(e), "vehiculo_stats": vehiculo_stats}
 
     return JSONResponse(content=respuesta)
 
 
-# ✅ Render health-check puede usar HEAD / (evita 405)
+# =========================
+# HEALTH
+# =========================
 @app.head("/")
 def head_root():
     return Response(status_code=200)
@@ -348,9 +405,9 @@ def head_root():
 
 @app.get("/")
 def root():
-    return {"message": "API SICETAC", "version": "2.1.0"}
+    return {"message": "API SICETAC", "version": "2.1.1"}
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "2.1.0"}
+    return {"status": "healthy", "version": "2.1.1"}
