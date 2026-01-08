@@ -416,8 +416,6 @@ def calcular_sicetac(data: ConsultaInput):
     if estadistica_activado(data.estadistica):
         respuesta.update({
             "ESTADISTICAS": obtener_estadisticas_completas(
-                origen=origen_nombre,
-                destino=destino_nombre,
                 cod_origen=cod_origen,
                 cod_destino=cod_destino
             ),

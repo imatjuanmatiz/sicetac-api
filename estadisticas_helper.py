@@ -1,384 +1,278 @@
-# estadisticas_helper.py - Versión Simplificada (Solo 2025)
+# estadisticas_helper.py
+from __future__ import annotations
 
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 import pandas as pd
-from functools import lru_cache
-import os
 
-# Solo cargamos archivos cuando se necesitan (lazy loading)
-# Para evolución: 2024 y 2025
-# Para todo lo demás: solo 2025
+BASE_DIR = Path(__file__).resolve().parent
 
-@lru_cache(maxsize=2)
-def _cargar_rutas(anio):
-    """Carga el archivo de rutas solo cuando se necesita (2024 o 2025)"""
-    archivo = f"consolidacion_rutas_{anio}.xlsx"
-    if not os.path.exists(archivo):
-        return pd.DataFrame()
-    return pd.read_excel(archivo)
+# Archivos actuales (según tu repo)
+FILE_MERCANCIAS_TOP20_2025 = "consolidacion_anual_mercancia_top20_2025.xlsx"
+FILE_RUTAS_2024 = "consolidacion_rutas_2024.xlsx"
+FILE_RUTAS_2025 = "consolidacion_rutas_2025.xlsx"
+FILE_RUTAS_VEH_2025 = "consolidacion_rutas_vehiculo_2025.xlsx"
+FILE_TOP_DESTINOS_ORIGEN_2025 = "red_top20_destinos_origen_2025.xlsx"
+FILE_TOP_ORIGENES_DESTINO_2025 = "red_top20_origenes_por_destino_2025.xlsx"
 
-@lru_cache(maxsize=1)
-def _cargar_mercancias():
-    """Carga el archivo de mercancías de 2025"""
-    archivo = "consolidacion_anual_mercancia_top20_2025.xlsx"
-    if not os.path.exists(archivo):
-        return pd.DataFrame()
-    return pd.read_excel(archivo)
-
-@lru_cache(maxsize=1)
-def _cargar_destinos():
-    """Carga el archivo de destinos de 2025"""
-    archivo = "red_top20_destinos_origen_2025.xlsx"
-    if not os.path.exists(archivo):
-        return pd.DataFrame()
-    return pd.read_excel(archivo)
-
-@lru_cache(maxsize=1)
-def _cargar_origenes():
-    """Carga el archivo de orígenes de 2025"""
-    archivo = "red_top20_origenes_por_destino_2025.xlsx"
-    if not os.path.exists(archivo):
-        return pd.DataFrame()
-    return pd.read_excel(archivo)
-
-@lru_cache(maxsize=1)
-def _cargar_vehiculos():
-    """Carga el archivo de vehículos de 2025"""
-    archivo = "consolidacion_rutas_vehiculo_2025.xlsx"
-    if not os.path.exists(archivo):
-        return pd.DataFrame()
-    return pd.read_excel(archivo)
+# Cache interno de dataframes (lazy loading)
+_DF_CACHE: Dict[str, Optional[pd.DataFrame]] = {}
 
 
-def obtener_evolucion_viajes_y_toneladas(origen, destino):
+def _path(name: str) -> Path:
+    return BASE_DIR / name
+
+
+def _safe_read_excel(name: str) -> Optional[pd.DataFrame]:
+    """Carga un Excel solo cuando se necesita. Si no existe, retorna None."""
+    if name in _DF_CACHE:
+        return _DF_CACHE[name]
+
+    p = _path(name)
+    if not p.exists():
+        _DF_CACHE[name] = None
+        return None
+
+    df = pd.read_excel(p)
+    # Normalización ligera de columnas
+    df.columns = [str(c).strip().upper() for c in df.columns]
+    _DF_CACHE[name] = df
+    return df
+
+
+def _to_int(x: Any) -> Optional[int]:
+    try:
+        if pd.isna(x):
+            return None
+        return int(x)
+    except Exception:
+        return None
+
+
+def _route_key_from_codes(cod_origen: Union[str, int], cod_destino: Union[str, int]) -> str:
+    return f"{int(cod_origen)}-{int(cod_destino)}"
+
+
+def _filter_ruta(df: pd.DataFrame, cod_origen: int, cod_destino: int) -> pd.DataFrame:
     """
-    Retorna la evolución mensual de viajes y toneladas para una ruta específica.
-    Compara datos de 2024 y 2025 para ver la evolución.
+    Filtra por ruta usando:
+    - RUTA == "ORIGEN-DESTINO" (formato típico)
+    - o columnas CODIGO_ORIGEN / CODIGO_DESTINO
     """
-    clave = f"{origen}-{destino}"
-    
-    # Cargar ambos años para comparación
-    df_2024 = _cargar_rutas(2024)
-    df_2025 = _cargar_rutas(2025)
-    
-    # Filtrar datos de ambos años
-    df_2024_filtrado = df_2024[df_2024["RUTA"] == clave].copy() if not df_2024.empty else pd.DataFrame()
-    df_2025_filtrado = df_2025[df_2025["RUTA"] == clave].copy() if not df_2025.empty else pd.DataFrame()
-    
-    # Combinar
-    df_combined = pd.concat([df_2024_filtrado, df_2025_filtrado], ignore_index=True)
-    
-    if df_combined.empty:
-        return []
-    
-    # Agrupar por mes y sumar (en caso de múltiples naturalezas de carga)
-    df_grouped = df_combined.groupby('AÑOMES', as_index=False).agg({
-        'TOTAL_VIAJES': 'sum',
-        'TOTAL_KILOGRAMOS': 'sum',
-        'TOTAL_GALONES': 'sum'
-    })
-    
-    # Agregar columna de toneladas
-    df_grouped['TONELADAS'] = df_grouped['TOTAL_KILOGRAMOS'] / 1000
-    
-    # Ordenar por mes
-    df_grouped = df_grouped.sort_values('AÑOMES')
-    
-    # Liberar memoria
-    del df_2024_filtrado, df_2025_filtrado, df_combined
-    
-    return df_grouped.to_dict(orient="records")
+    cols = set(df.columns)
+    clave = _route_key_from_codes(cod_origen, cod_destino)
+
+    if "RUTA" in cols:
+        dfr = df[df["RUTA"].astype(str).str.strip() == clave]
+        if not dfr.empty:
+            return dfr
+
+    if "CODIGO_ORIGEN" in cols and "CODIGO_DESTINO" in cols:
+        dfr = df[(df["CODIGO_ORIGEN"] == cod_origen) & (df["CODIGO_DESTINO"] == cod_destino)]
+        if not dfr.empty:
+            return dfr
+
+    # intenta también sentido inverso (por si viene al revés)
+    if "RUTA" in cols:
+        clave_inv = _route_key_from_codes(cod_destino, cod_origen)
+        dfr = df[df["RUTA"].astype(str).str.strip() == clave_inv]
+        if not dfr.empty:
+            return dfr
+
+    if "CODIGO_ORIGEN" in cols and "CODIGO_DESTINO" in cols:
+        dfr = df[(df["CODIGO_ORIGEN"] == cod_destino) & (df["CODIGO_DESTINO"] == cod_origen)]
+        if not dfr.empty:
+            return dfr
+
+    return df.iloc[0:0]
 
 
-def obtener_top_mercancias_ruta(origen, destino):
+# =========================================================
+# 1) Evolución viajes/toneladas (2024 y 2025, por mes y naturaleza)
+#    usando consolidacion_rutas_2024 + consolidacion_rutas_2025
+# =========================================================
+def obtener_evolucion_viajes_y_toneladas(codigo_origen: int, codigo_destino: int) -> Dict[str, Any]:
     """
-    Retorna el top 20 de mercancías para una ruta específica en 2025.
-    """
-    clave = f"{origen}-{destino}"
-    
-    # Cargar mercancías de 2025
-    df = _cargar_mercancias()
-    
-    if df.empty:
-        return []
-    
-    # Filtrar por ruta
-    df_filtrado = df[df["RUTA"] == clave].copy()
-    
-    if df_filtrado.empty:
-        return []
-    
-    # Ordenar y tomar top 20
-    df_filtrado = df_filtrado.sort_values("TONELADAS", ascending=False).head(20)
-    
-    resultado = df_filtrado[[
-        "CODMERCANCIA", 
-        "MERCANCIA", 
-        "TOTAL_VIAJES",
-        "TONELADAS", 
-        "PCT_PARTICIPACION"
-    ]].to_dict(orient="records")
-    
-    del df_filtrado
-    return resultado
-
-
-def obtener_top_destinos(cod_origen):
-    """
-    Retorna el top 20 de destinos para un origen específico en 2025.
-    """
-    df = _cargar_destinos()
-    
-    if df.empty:
-        return []
-    
-    df_filtrado = df[df["CODIGO_ORIGEN"] == int(cod_origen)].copy()
-    
-    if df_filtrado.empty:
-        return []
-    
-    df_filtrado = df_filtrado.sort_values("TONELADAS", ascending=False).head(20)
-    
-    resultado = df_filtrado[[
-        "CODIGO_DESTINO",
-        "MUNICIPIO_DESTINO",
-        "TOTAL_VIAJES",
-        "TONELADAS"
-    ]].to_dict(orient="records")
-    
-    del df_filtrado
-    return resultado
-
-
-def obtener_top_origenes(cod_destino):
-    """
-    Retorna el top 20 de orígenes para un destino específico en 2025.
-    """
-    df = _cargar_origenes()
-    
-    if df.empty:
-        return []
-    
-    df_filtrado = df[df["CODIGO_DESTINO"] == int(cod_destino)].copy()
-    
-    if df_filtrado.empty:
-        return []
-    
-    df_filtrado = df_filtrado.sort_values("TONELADAS", ascending=False).head(20)
-    
-    resultado = df_filtrado[[
-        "CODIGO_ORIGEN",
-        "MUNICIPIO_ORIGEN",
-        "TOTAL_VIAJES",
-        "TONELADAS"
-    ]].to_dict(orient="records")
-    
-    del df_filtrado
-    return resultado
-
-
-def obtener_distribucion_vehiculos_ruta(origen, destino):
-    """
-    Retorna la distribución de tipos de vehículos para una ruta específica en 2025.
-    """
-    clave = f"{origen}-{destino}"
-    
-    df = _cargar_vehiculos()
-    
-    if df.empty:
-        return []
-    
-    df_filtrado = df[df["RUTA"] == clave].copy()
-    
-    if df_filtrado.empty:
-        return []
-    
-    # Agrupar por configuración de vehículo
-    df_grouped = df_filtrado.groupby('COD_CONFIG_VEHICULO', as_index=False).agg({
-        'TOTAL_VIAJES': 'sum',
-        'TOTAL_KILOGRAMOS': 'sum',
-        'TOTAL_GALONES': 'sum'
-    })
-    
-    # Agregar toneladas
-    df_grouped['TONELADAS'] = df_grouped['TOTAL_KILOGRAMOS'] / 1000
-    
-    # Ordenar por número de viajes
-    df_grouped = df_grouped.sort_values("TOTAL_VIAJES", ascending=False)
-    
-    resultado = df_grouped[[
-        "COD_CONFIG_VEHICULO",
-        "TOTAL_VIAJES",
-        "TONELADAS",
-        "TOTAL_GALONES"
-    ]].to_dict(orient="records")
-    
-    del df_filtrado, df_grouped
-    return resultado
-
-
-def obtener_evolucion_por_naturaleza_carga(origen, destino):
-    """
-    Retorna la evolución mensual de una ruta específica en 2025,
-    separada por naturaleza de carga (General, Perecedero, etc.).
-    """
-    clave = f"{origen}-{destino}"
-    
-    df = _cargar_rutas(2025)
-    
-    if df.empty:
-        return []
-    
-    df_filtrado = df[df["RUTA"] == clave].copy()
-    
-    if df_filtrado.empty:
-        return []
-    
-    # Agregar toneladas
-    df_filtrado['TONELADAS'] = df_filtrado['TOTAL_KILOGRAMOS'] / 1000
-    
-    # Ordenar por mes
-    df_filtrado = df_filtrado.sort_values('AÑOMES')
-    
-    resultado = df_filtrado[[
-        "AÑOMES",
-        "NATURALEZACARGA",
-        "TOTAL_VIAJES",
-        "TONELADAS",
-        "TOTAL_GALONES"
-    ]].to_dict(orient="records")
-    
-    del df_filtrado
-    return resultado
-
-
-def obtener_comparacion_anual_ruta(origen, destino):
-    """
-    Compara los totales anuales de una ruta entre 2024 y 2025.
-    Útil para ver el crecimiento/decrecimiento de la ruta.
-    """
-    clave = f"{origen}-{destino}"
-    
-    # Datos 2024
-    df_2024 = _cargar_rutas(2024)
-    total_2024 = {
-        "anio": 2024,
-        "total_viajes": 0,
-        "total_toneladas": 0.0,
-        "total_galones": 0.0
+    Retorna:
+    {
+      "2024": [ { "ANOMES": 202401, "NATURALEZACARGA": "...", "TOTAL_VIAJES": ..., "TOTAL_KILOGRAMOS": ..., "TONELADAS": ... }, ... ],
+      "2025": [ ... ]
     }
-    
-    if not df_2024.empty:
-        df_2024_filtrado = df_2024[df_2024["RUTA"] == clave]
-        if not df_2024_filtrado.empty:
-            total_2024 = {
-                "anio": 2024,
-                "total_viajes": int(df_2024_filtrado['TOTAL_VIAJES'].sum()),
-                "total_toneladas": round(df_2024_filtrado['TOTAL_KILOGRAMOS'].sum() / 1000, 2),
-                "total_galones": round(df_2024_filtrado['TOTAL_GALONES'].sum(), 2)
-            }
-        del df_2024_filtrado
-    
-    # Datos 2025
-    df_2025 = _cargar_rutas(2025)
-    total_2025 = {
-        "anio": 2025,
-        "total_viajes": 0,
-        "total_toneladas": 0.0,
-        "total_galones": 0.0
-    }
-    
-    if not df_2025.empty:
-        df_2025_filtrado = df_2025[df_2025["RUTA"] == clave]
-        if not df_2025_filtrado.empty:
-            total_2025 = {
-                "anio": 2025,
-                "total_viajes": int(df_2025_filtrado['TOTAL_VIAJES'].sum()),
-                "total_toneladas": round(df_2025_filtrado['TOTAL_KILOGRAMOS'].sum() / 1000, 2),
-                "total_galones": round(df_2025_filtrado['TOTAL_GALONES'].sum(), 2)
-            }
-        del df_2025_filtrado
-    
-    # Calcular variaciones porcentuales
-    variacion = {
-        "variacion_viajes_pct": 0.0,
-        "variacion_toneladas_pct": 0.0,
-        "variacion_galones_pct": 0.0
-    }
-    
-    if total_2024["total_viajes"] > 0:
-        variacion["variacion_viajes_pct"] = round(
-            ((total_2025["total_viajes"] - total_2024["total_viajes"]) / total_2024["total_viajes"] * 100), 2
-        )
-    
-    if total_2024["total_toneladas"] > 0:
-        variacion["variacion_toneladas_pct"] = round(
-            ((total_2025["total_toneladas"] - total_2024["total_toneladas"]) / total_2024["total_toneladas"] * 100), 2
-        )
-    
-    if total_2024["total_galones"] > 0:
-        variacion["variacion_galones_pct"] = round(
-            ((total_2025["total_galones"] - total_2024["total_galones"]) / total_2024["total_galones"] * 100), 2
-        )
-    
-    return {
-        "2024": total_2024,
-        "2025": total_2025,
-        "variacion": variacion
-    }
-
-
-def obtener_resumen_ruta(origen, destino):
     """
-    Retorna un resumen completo de una ruta específica en 2025.
-    Incluye: totales, top mercancías, distribución de vehículos.
+    out: Dict[str, Any] = {"2024": [], "2025": []}
+
+    df24 = _safe_read_excel(FILE_RUTAS_2024)
+    if df24 is not None:
+        # columnas esperadas: RUTA, CODIGO_ORIGEN, CODIGO_DESTINO, NATURALEZACARGA, AÑOMES, TOTAL_VIAJES, TOTAL_KILOGRAMOS, TOTAL_GALONES
+        dfr = _filter_ruta(df24, codigo_origen, codigo_destino)
+        if not dfr.empty:
+            # calcula toneladas
+            dfr = dfr.copy()
+            if "TOTAL_KILOGRAMOS" in dfr.columns:
+                dfr["TONELADAS"] = pd.to_numeric(dfr["TOTAL_KILOGRAMOS"], errors="coerce") / 1000.0
+            cols = ["AÑOMES", "NATURALEZACARGA", "TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS", "TOTAL_GALONES"]
+            cols = [c for c in cols if c in dfr.columns]
+            dfr = dfr[cols].sort_values(by=["AÑOMES", "NATURALEZACARGA"], ascending=True)
+            out["2024"] = dfr.to_dict(orient="records")
+        else:
+            out["2024"] = []
+
+    else:
+        out["2024"] = [{"warning": f"Archivo no disponible: {FILE_RUTAS_2024}"}]
+
+    df25 = _safe_read_excel(FILE_RUTAS_2025)
+    if df25 is not None:
+        dfr = _filter_ruta(df25, codigo_origen, codigo_destino)
+        if not dfr.empty:
+            dfr = dfr.copy()
+            if "TOTAL_KILOGRAMOS" in dfr.columns:
+                dfr["TONELADAS"] = pd.to_numeric(dfr["TOTAL_KILOGRAMOS"], errors="coerce") / 1000.0
+            cols = ["AÑOMES", "NATURALEZACARGA", "TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS", "TOTAL_GALONES"]
+            cols = [c for c in cols if c in dfr.columns]
+            dfr = dfr[cols].sort_values(by=["AÑOMES", "NATURALEZACARGA"], ascending=True)
+            out["2025"] = dfr.to_dict(orient="records")
+        else:
+            out["2025"] = []
+    else:
+        out["2025"] = [{"warning": f"Archivo no disponible: {FILE_RUTAS_2025}"}]
+
+    return out
+
+
+# =========================================================
+# 2) Top 20 mercancías por ruta (2025)
+#    consolidacion_anual_mercancia_top20_2025
+# =========================================================
+def obtener_top_mercancias_ruta(codigo_origen: int, codigo_destino: int, top_n: int = 20) -> List[Dict[str, Any]]:
     """
-    clave = f"{origen}-{destino}"
-    
-    # Obtener datos de rutas 2025
-    df = _cargar_rutas(2025)
-    
-    if df.empty:
-        return {
-            "ruta": clave,
-            "datos_disponibles": False
-        }
-    
-    df_ruta = df[df["RUTA"] == clave]
-    
-    if df_ruta.empty:
-        return {
-            "ruta": clave,
-            "datos_disponibles": False
-        }
-    
-    # Calcular totales
-    totales = {
-        "total_viajes": int(df_ruta['TOTAL_VIAJES'].sum()),
-        "total_toneladas": round(df_ruta['TOTAL_KILOGRAMOS'].sum() / 1000, 2),
-        "total_galones": round(df_ruta['TOTAL_GALONES'].sum(), 2)
-    }
-    
-    # Top mercancías
-    top_mercancias = obtener_top_mercancias_ruta(origen, destino)
-    
-    # Distribución de vehículos
-    vehiculos = obtener_distribucion_vehiculos_ruta(origen, destino)
-    
-    return {
-        "ruta": clave,
-        "datos_disponibles": True,
-        "anio": 2025,
-        "totales": totales,
-        "top_mercancias": top_mercancias[:5],  # Solo top 5 para el resumen
-        "vehiculos": vehiculos[:5]  # Solo top 5 para el resumen
-    }
+    Retorna lista top mercancías 2025 para la ruta.
+    No discrimina por vehículo (según tu definición).
+    """
+    df = _safe_read_excel(FILE_MERCANCIAS_TOP20_2025)
+    if df is None:
+        return [{"warning": f"Archivo no disponible: {FILE_MERCANCIAS_TOP20_2025}"}]
+
+    dfr = _filter_ruta(df, codigo_origen, codigo_destino)
+    if dfr.empty:
+        return []
+
+    # columnas esperadas:
+    # AÑO, RUTA, CODIGO_ORIGEN, CODIGO_DESTINO, CODMERCANCIA, MERCANCIA, TOTAL_VIAJES, TOTAL_KILOGRAMOS, TONELADAS, TONELADAS_RUTA, PCT_PARTICIPACION
+    dfr = dfr.copy()
+
+    # Asegura numéricos
+    for c in ["TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS", "TONELADAS_RUTA", "PCT_PARTICIPACION"]:
+        if c in dfr.columns:
+            dfr[c] = pd.to_numeric(dfr[c], errors="coerce")
+
+    # orden: participación desc si está, si no toneladas desc, si no viajes desc
+    if "PCT_PARTICIPACION" in dfr.columns:
+        dfr = dfr.sort_values("PCT_PARTICIPACION", ascending=False)
+    elif "TONELADAS" in dfr.columns:
+        dfr = dfr.sort_values("TONELADAS", ascending=False)
+    elif "TOTAL_VIAJES" in dfr.columns:
+        dfr = dfr.sort_values("TOTAL_VIAJES", ascending=False)
+
+    cols = ["AÑO", "CODMERCANCIA", "MERCANCIA", "TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS", "TONELADAS_RUTA", "PCT_PARTICIPACION"]
+    cols = [c for c in cols if c in dfr.columns]
+    return dfr[cols].head(top_n).to_dict(orient="records")
 
 
-# Función para limpiar cache si es necesario
-def limpiar_cache():
-    """Limpia el cache de archivos cargados para liberar memoria"""
-    _cargar_rutas.cache_clear()
-    _cargar_mercancias.cache_clear()
-    _cargar_destinos.cache_clear()
-    _cargar_origenes.cache_clear()
-    _cargar_vehiculos.cache_clear()
+# =========================================================
+# 3) Top 20 destinos por origen (2025) - red_top20_destinos_origen_2025
+# =========================================================
+def obtener_top_destinos(codigo_origen: int, top_n: int = 20) -> List[Dict[str, Any]]:
+    df = _safe_read_excel(FILE_TOP_DESTINOS_ORIGEN_2025)
+    if df is None:
+        return [{"warning": f"Archivo no disponible: {FILE_TOP_DESTINOS_ORIGEN_2025}"}]
+
+    if "CODIGO_ORIGEN" not in df.columns:
+        return [{"warning": f"Columna CODIGO_ORIGEN no existe en {FILE_TOP_DESTINOS_ORIGEN_2025}"}]
+
+    dfr = df[df["CODIGO_ORIGEN"] == int(codigo_origen)].copy()
+    if dfr.empty:
+        return []
+
+    for c in ["TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS"]:
+        if c in dfr.columns:
+            dfr[c] = pd.to_numeric(dfr[c], errors="coerce")
+
+    # orden por viajes desc (o toneladas si no hay)
+    if "TOTAL_VIAJES" in dfr.columns:
+        dfr = dfr.sort_values("TOTAL_VIAJES", ascending=False)
+    elif "TONELADAS" in dfr.columns:
+        dfr = dfr.sort_values("TONELADAS", ascending=False)
+
+    cols = ["AÑO", "CODIGO_ORIGEN", "MUNICIPIO_ORIGEN", "CODIGO_DESTINO", "MUNICIPIO_DESTINO", "TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS"]
+    cols = [c for c in cols if c in dfr.columns]
+    return dfr[cols].head(top_n).to_dict(orient="records")
+
+
+# =========================================================
+# 4) Top 20 orígenes por destino (2025) - red_top20_origenes_por_destino_2025
+# =========================================================
+def obtener_top_origenes(codigo_destino: int, top_n: int = 20) -> List[Dict[str, Any]]:
+    df = _safe_read_excel(FILE_TOP_ORIGENES_DESTINO_2025)
+    if df is None:
+        return [{"warning": f"Archivo no disponible: {FILE_TOP_ORIGENES_DESTINO_2025}"}]
+
+    if "CODIGO_DESTINO" not in df.columns:
+        return [{"warning": f"Columna CODIGO_DESTINO no existe en {FILE_TOP_ORIGENES_DESTINO_2025}"}]
+
+    dfr = df[df["CODIGO_DESTINO"] == int(codigo_destino)].copy()
+    if dfr.empty:
+        return []
+
+    for c in ["TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS"]:
+        if c in dfr.columns:
+            dfr[c] = pd.to_numeric(dfr[c], errors="coerce")
+
+    if "TOTAL_VIAJES" in dfr.columns:
+        dfr = dfr.sort_values("TOTAL_VIAJES", ascending=False)
+    elif "TONELADAS" in dfr.columns:
+        dfr = dfr.sort_values("TONELADAS", ascending=False)
+
+    cols = ["AÑO", "CODIGO_DESTINO", "MUNICIPIO_DESTINO", "CODIGO_ORIGEN", "MUNICIPIO_ORIGEN", "TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS"]
+    cols = [c for c in cols if c in dfr.columns]
+    return dfr[cols].head(top_n).to_dict(orient="records")
+
+
+# =========================================================
+# 5) Distribución de vehículos por ruta (2025) - consolidacion_rutas_vehiculo_2025
+# =========================================================
+def obtener_distribucion_vehiculos_ruta(codigo_origen: int, codigo_destino: int) -> List[Dict[str, Any]]:
+    """
+    Devuelve distribución 2025 por COD_CONFIG_VEHICULO para la ruta.
+    Salida agregada por vehículo:
+      [{ "COD_CONFIG_VEHICULO": "3S3", "TOTAL_VIAJES": ..., "TOTAL_KILOGRAMOS": ..., "TONELADAS": ..., "PCT_VIAJES": ... }, ...]
+    """
+    df = _safe_read_excel(FILE_RUTAS_VEH_2025)
+    if df is None:
+        return [{"warning": f"Archivo no disponible: {FILE_RUTAS_VEH_2025}"}]
+
+    dfr = _filter_ruta(df, codigo_origen, codigo_destino)
+    if dfr.empty:
+        return []
+
+    required = {"COD_CONFIG_VEHICULO", "TOTAL_VIAJES", "TOTAL_KILOGRAMOS"}
+    if not required.issubset(set(dfr.columns)):
+        return [{"warning": f"Faltan columnas esperadas en {FILE_RUTAS_VEH_2025}: {sorted(list(required - set(dfr.columns)))}"}]
+
+    dfr = dfr.copy()
+    dfr["TOTAL_VIAJES"] = pd.to_numeric(dfr["TOTAL_VIAJES"], errors="coerce").fillna(0)
+    dfr["TOTAL_KILOGRAMOS"] = pd.to_numeric(dfr["TOTAL_KILOGRAMOS"], errors="coerce").fillna(0)
+    dfr["TONELADAS"] = dfr["TOTAL_KILOGRAMOS"] / 1000.0
+
+    agg = (
+        dfr.groupby("COD_CONFIG_VEHICULO", as_index=False)[["TOTAL_VIAJES", "TOTAL_KILOGRAMOS", "TONELADAS"]]
+        .sum()
+    )
+
+    total_viajes = float(agg["TOTAL_VIAJES"].sum()) if not agg.empty else 0.0
+    if total_viajes > 0:
+        agg["PCT_VIAJES"] = (agg["TOTAL_VIAJES"] / total_viajes) * 100.0
+    else:
+        agg["PCT_VIAJES"] = 0.0
+
+    agg = agg.sort_values("TOTAL_VIAJES", ascending=False)
+    return agg.to_dict(orient="records")

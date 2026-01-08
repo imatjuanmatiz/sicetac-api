@@ -1,281 +1,475 @@
-import pandas as pd
-import numpy as np
+# contexto_helper.py
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 import math
+import pandas as pd
 import unicodedata
-from depto_helper import DeptoHelper  # Si usas este helper en bloqueos
+
+from depto_helper import DeptoHelper
 from estadisticas_helper import (
     obtener_evolucion_viajes_y_toneladas,
     obtener_top_mercancias_ruta,
     obtener_top_destinos,
     obtener_top_origenes,
-    obtener_distribucion_vehiculos_ruta
+    obtener_distribucion_vehiculos_ruta,
 )
 
-# contexto_helper.py
+BASE_DIR = Path(__file__).resolve().parent
+
+# Archivos actuales (según tu repo)
+FILE_VALORES = "VALORES_CONSOLIDADOS_2025.xlsx"
+FILE_TIEMPOS = "indice_cargue_descargue_resumen_mensual.xlsx"
+FILE_COMPETITIVIDAD = "competitividad_rutas_2025.xlsx"
+FILE_CONFIG_VEH = "CONFIGURACION_VEHICULAR_LIMPIO.xlsx"
+FILE_MUNICIPIOS = "municipios.xlsx"
+
+FILE_DEPTO_RUTAS = "DEPARTAMENTOS EN RUTAS SICE.xlsx"
+FILE_BLOQUEOS = "BLOQUEOS EN VIAS COLFECAR.xlsx"
+
+# Cache lazy
+_DF_CACHE: Dict[str, Optional[pd.DataFrame]] = {}
+_MAP_CACHE: Dict[str, Any] = {}
+
+# Modo global (si lo sigues usando)
 _modo_viaje_global = "CARGADO"
+
 
 def set_modo_viaje(modo: str):
     global _modo_viaje_global
     _modo_viaje_global = str(modo).upper().strip()
 
+
 def get_modo_viaje() -> str:
     return _modo_viaje_global
 
-# =========================================
-# 🧹 Función para limpiar NaN en los outputs
-# =========================================
-def limpiar_nan_json(obj):
+
+def _path(name: str) -> Path:
+    return BASE_DIR / name
+
+
+def _safe_read_excel(name: str) -> Optional[pd.DataFrame]:
+    if name in _DF_CACHE:
+        return _DF_CACHE[name]
+
+    p = _path(name)
+    if not p.exists():
+        _DF_CACHE[name] = None
+        return None
+
+    df = pd.read_excel(p)
+    df.columns = [str(c).strip().upper() for c in df.columns]
+    _DF_CACHE[name] = df
+    return df
+
+
+def _norm_text(s: Any) -> str:
+    s = str(s).strip().upper()
+    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    s = " ".join(s.split())
+    return s
+
+
+def limpiar_nan_json(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: limpiar_nan_json(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
+    if isinstance(obj, list):
         return [limpiar_nan_json(v) for v in obj]
-    elif isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
         return None
-    else:
-        return obj
+    return obj
 
-# ================================
-# ✅ Carga única de todas las bases
-# ================================
-df_valores = pd.read_excel("VALORES_CONSOLIDADOS_2025.xlsx")
-df_tiempos = pd.read_excel("indice_cargue_descargue_resumen_mensual.xlsx")
-df_competitividad = pd.read_excel("competitividad_rutas_2025.xlsx")
 
-# Nueva carga: Mapeo de configuraciones vehiculares
-df_config = pd.read_excel("CONFIGURACION_VEHICULAR_LIMPIO.xlsx")
-df_config['TIPO_VEHICULO'] = df_config['TIPO_VEHICULO'].astype(str).str.strip().str.upper()
-df_config['CONFIGURACION_ANALISIS'] = df_config['CONFIGURACION_ANALISIS'].astype(str).str.strip().str.upper()
-mapeo_config = dict(zip(df_config['TIPO_VEHICULO'], df_config['CONFIGURACION_ANALISIS']))
+# =========================================================
+# Mapeo de configuración vehicular -> CONFIGURACION_ANALISIS
+# =========================================================
+def _get_mapeo_config() -> Dict[str, str]:
+    if "mapeo_config" in _MAP_CACHE:
+        return _MAP_CACHE["mapeo_config"]
 
-def traducir_config(config):
-    """Traduce configuración usando el mapeo, si es necesario."""
-    config = config.upper()
-    return mapeo_config.get(config, config)
+    df = _safe_read_excel(FILE_CONFIG_VEH)
+    if df is None:
+        _MAP_CACHE["mapeo_config"] = {}
+        return {}
 
-# =======================================
-# 1. HISTÓRICO DE VALORES DE MERCADO
-# =======================================
+    # Esperadas: TIPO_VEHICULO, CONFIGURACION_ANALISIS
+    if "TIPO_VEHICULO" not in df.columns or "CONFIGURACION_ANALISIS" not in df.columns:
+        _MAP_CACHE["mapeo_config"] = {}
+        return {}
 
-def obtener_valores_promedio_mercado_por_llave(ruta_config):
+    df = df.copy()
+    df["TIPO_VEHICULO"] = df["TIPO_VEHICULO"].astype(str).str.strip().str.upper()
+    df["CONFIGURACION_ANALISIS"] = df["CONFIGURACION_ANALISIS"].astype(str).str.strip().str.upper()
+
+    m = dict(zip(df["TIPO_VEHICULO"], df["CONFIGURACION_ANALISIS"]))
+    _MAP_CACHE["mapeo_config"] = m
+    return m
+
+
+def traducir_config(config: str) -> str:
+    """Traduce configuración con el mapeo si aplica; si no, devuelve la misma."""
+    config = str(config).strip().upper()
+    m = _get_mapeo_config()
+    return m.get(config, config)
+
+
+# =========================================================
+# 1) VALORES PROMEDIO (mercado / valpagados)
+#    Usa VALORES_CONSOLIDADOS_2025.xlsx
+# =========================================================
+def obtener_valores_promedio_mercado_por_llave(ruta_config: str) -> List[Dict[str, Any]]:
     """
-    Devuelve una lista de diccionarios
-    {'MES': ..., 'VALOR_PROMEDIO_MERCADO': ..., 'VALOR_PROMEDIO_VALPAGADOS': ...}
-    para cada mes registrado en el Excel, según la llave exacta 'RUTA_CONFIGURACION'.
+    Espera que el excel tenga columna:
+      - RUTA_CONFIGURACION
+      - MES
+      - VALOR_PROMEDIO_VALPAGADOS (si existe)
+      - (opcional) VALOR_PROMEDIO_MERCADO
+    Retorna series mensual ordenada.
     """
+    df = _safe_read_excel(FILE_VALORES)
+    if df is None:
+        return [{"warning": f"Archivo no disponible: {FILE_VALORES}"}]
+
+    if "RUTA_CONFIGURACION" not in df.columns or "MES" not in df.columns:
+        return [{"warning": f"Columnas esperadas no existen en {FILE_VALORES} (RUTA_CONFIGURACION, MES)"}]
+
     ruta_config = str(ruta_config).strip().upper()
-    df_valores["RUTA_CONFIGURACION"] = df_valores["RUTA_CONFIGURACION"].astype(str).str.upper().str.strip()
-    # Asegúrate que ambas columnas son numéricas
-    df_valores["VALOR_PROMEDIO_VALPAGADOS"] = pd.to_numeric(df_valores["VALOR_PROMEDIO_VALPAGADOS"], errors="coerce")
+    dfr = df.copy()
+    dfr["RUTA_CONFIGURACION"] = dfr["RUTA_CONFIGURACION"].astype(str).str.strip().str.upper()
 
-    # DEBUG para ver exactamente qué filas se están usando
-    print(f"🔍 Buscando ruta_config: {ruta_config}")
-    df_filtrado = df_valores[df_valores["RUTA_CONFIGURACION"] == ruta_config]
-    print("Filas encontradas:", len(df_filtrado))
-    print(df_filtrado[["MES", "VALOR_PROMEDIO_VALPAGADOS"]])
+    out_cols = ["MES"]
+    if "VALOR_PROMEDIO_VALPAGADOS" in dfr.columns:
+        dfr["VALOR_PROMEDIO_VALPAGADOS"] = pd.to_numeric(dfr["VALOR_PROMEDIO_VALPAGADOS"], errors="coerce")
+        out_cols.append("VALOR_PROMEDIO_VALPAGADOS")
+    if "VALOR_PROMEDIO_MERCADO" in dfr.columns:
+        dfr["VALOR_PROMEDIO_MERCADO"] = pd.to_numeric(dfr["VALOR_PROMEDIO_MERCADO"], errors="coerce")
+        out_cols.append("VALOR_PROMEDIO_MERCADO")
 
-    # Si no hay datos, retorna lista vacía
-    if df_filtrado.empty:
+    dff = dfr[dfr["RUTA_CONFIGURACION"] == ruta_config]
+    if dff.empty:
         return []
 
-    # Ordena y retorna solo lo que pide el API
-    df_filtrado = df_filtrado.sort_values("MES")
-    return df_filtrado[["MES", "VALOR_PROMEDIO_VALPAGADOS"]].to_dict(orient="records")
+    dff = dff.sort_values("MES")
+    return dff[out_cols].to_dict(orient="records")
 
-# =======================================
-# 2. INDICADORES OPERATIVOS
-# =======================================
-def obtener_indicadores(municipio_dane, configuracion):
+
+# =========================================================
+# 2) INDICADORES (índice cargue/descargue)
+#    indice_cargue_descargue_resumen_mensual.xlsx
+# =========================================================
+def obtener_indicadores(municipio_dane: Union[int, str], configuracion: str) -> Optional[Dict[str, Any]]:
+    df = _safe_read_excel(FILE_TIEMPOS)
+    if df is None:
+        return {"warning": f"Archivo no disponible: {FILE_TIEMPOS}"}
+
     config = traducir_config(configuracion)
-    df_filtro = df_tiempos[
-        (df_tiempos["CODIGO_OBJETIVO"] == int(municipio_dane)) &
-        (df_tiempos["CONFIGURACION"].str.upper() == config)
-    ]
-    if df_filtro.empty:
+
+    # columnas esperadas (mínimo):
+    # CODIGO_OBJETIVO, CONFIGURACION, INDICE_CARGUE_DESCARGUE, VEHICULOS_CARGUE, VEHICULOS_DESCARGUE
+    if "CODIGO_OBJETIVO" not in df.columns or "CONFIGURACION" not in df.columns:
+        return {"warning": f"Columnas esperadas no existen en {FILE_TIEMPOS} (CODIGO_OBJETIVO, CONFIGURACION)"}
+
+    dfr = df.copy()
+    dfr["CONFIGURACION"] = dfr["CONFIGURACION"].astype(str).str.upper().str.strip()
+
+    filt = (dfr["CODIGO_OBJETIVO"] == int(municipio_dane)) & (dfr["CONFIGURACION"] == str(config).upper())
+    if not filt.any():
         return None
-    fila = df_filtro.iloc[0]
-    return {
-        "configuracion": fila["CONFIGURACION"],
-        "vehiculos_cargue": fila.get("VEHICULOS_CARGUE"),
-        "vehiculos_descargue": fila.get("VEHICULOS_DESCARGUE"),
-        "indice_cargue_descargue": fila.get("INDICE_CARGUE_DESCARGUE"),
-        "interpretacion": (
+
+    fila = dfr.loc[filt].iloc[0].to_dict()
+
+    idx = fila.get("INDICE_CARGUE_DESCARGUE")
+    try:
+        idx_num = float(idx) if idx is not None else None
+    except Exception:
+        idx_num = None
+
+    interpretacion = None
+    if idx_num is not None:
+        interpretacion = (
             "Exceso de oferta (salen más vehículos de los que llegan)"
-            if fila.get("INDICE_CARGUE_DESCARGUE", 0) > 1
+            if idx_num > 1
             else "Mayor recepción de vehículos (entran más de los que salen)"
         )
-    }
 
-# =======================================
-# 3. COMPETITIVIDAD POR RUTA
-# =======================================
-def evaluar_competitividad(origen, destino, configuracion):
+    return limpiar_nan_json(
+        {
+            "configuracion": fila.get("CONFIGURACION"),
+            "vehiculos_cargue": fila.get("VEHICULOS_CARGUE"),
+            "vehiculos_descargue": fila.get("VEHICULOS_DESCARGUE"),
+            "indice_cargue_descargue": fila.get("INDICE_CARGUE_DESCARGUE"),
+            "interpretacion": interpretacion,
+        }
+    )
+
+
+# =========================================================
+# 3) COMPETITIVIDAD POR RUTA
+#    competitividad_rutas_2025.xlsx
+# =========================================================
+def evaluar_competitividad(origen: Union[int, str], destino: Union[int, str], configuracion: str) -> Optional[Dict[str, Any]]:
+    df = _safe_read_excel(FILE_COMPETITIVIDAD)
+    if df is None:
+        return {"warning": f"Archivo no disponible: {FILE_COMPETITIVIDAD}"}
+
     config = traducir_config(configuracion)
-    fila = df_competitividad[
-        (df_competitividad["CODIGO_ORIGEN"] == int(origen)) &
-        (df_competitividad["CODIGO_DESTINO"] == int(destino)) &
-        (df_competitividad["CONFIGURACION"].str.upper() == config)
+
+    needed = {"CODIGO_ORIGEN", "CODIGO_DESTINO", "CONFIGURACION"}
+    if not needed.issubset(set(df.columns)):
+        return {"warning": f"Faltan columnas esperadas en {FILE_COMPETITIVIDAD}: {sorted(list(needed - set(df.columns)))}"}
+
+    dfr = df.copy()
+    dfr["CONFIGURACION"] = dfr["CONFIGURACION"].astype(str).str.upper().str.strip()
+
+    fila = dfr[
+        (dfr["CODIGO_ORIGEN"] == int(origen)) &
+        (dfr["CODIGO_DESTINO"] == int(destino)) &
+        (dfr["CONFIGURACION"] == str(config).upper())
     ]
+
     if fila.empty:
         return None
-    return fila.iloc[0].to_dict()
 
-# =======================================
-# 5. MESES DISPONIBLES PARA INDICADORES
-# =======================================
-def obtener_meses_disponibles_indicador(df, codigo_objetivo, configuracion):
-    config = traducir_config(configuracion)
-    filtro = (
-        (df["CODIGO_OBJETIVO"] == int(codigo_objetivo)) &
-        (df["CONFIGURACION"].str.upper() == config.upper())
-    )
-    meses = df.loc[filtro, "AÑOMES"].dropna().unique()
-    return sorted([int(m) for m in meses])
+    return limpiar_nan_json(fila.iloc[0].to_dict())
 
-# =======================================
-# 6. BLOQUEOS DE COLFECAR POR RUTA
-# =======================================
-def obtener_bloqueos_ruta_por_id(cod_origen, cod_destino, depto_helper_file='DEPTO HELPER.xlsx'):
+
+# =========================================================
+# 4) MESES DISPONIBLES PARA INDICADORES (si lo necesitas)
+# =========================================================
+def obtener_meses_disponibles_indicador(
+    df: Optional[pd.DataFrame] = None,
+    codigo_objetivo: Optional[Union[int, str]] = None,
+    configuracion: Optional[str] = None
+) -> List[int]:
     """
-    Analiza bloqueos históricos para una ruta definida por cod_origen y cod_destino, usando ID DEPTO.
-    Usa depto_helper para identificar IDs y EFECTO TOTAL HORAS para análisis.
-    Limpia columnas y asegura que no haya NaN en la respuesta JSON.
+    Compatible con usos anteriores:
+    - si no pasas df, usa FILE_TIEMPOS
+    - si no pasas filtro, devuelve todos los meses únicos que encuentre
     """
-    import pandas as pd
-    import math
-    import unicodedata
-    from depto_helper import DeptoHelper
+    if df is None:
+        df = _safe_read_excel(FILE_TIEMPOS)
 
-# ==== Estado global de modo de viaje (CARGADO | VACIO) ====\n_modo_viaje_global = "CARGADO"\n\ndef set_modo_viaje(modo: str):\n    global _modo_viaje_global\n    _modo_viaje_global = str(modo).upper().strip()\n\n\ndef get_modo_viaje() -> str:\n    return _modo_viaje_global\n\n
-    # ---- Función para limpiar columnas (mayúsculas, sin tildes, sin espacios extras) ----
-    def limpiar_columna(col):
-        col = col.strip().upper()
-        col = ''.join((c for c in unicodedata.normalize('NFD', col) if unicodedata.category(c) != 'Mn'))
-        return col
+    if df is None:
+        return []
 
-    # ---- Función para limpiar NaN e infinitos de la salida ----
-    def limpiar_nan_json(obj):
-        if isinstance(obj, dict):
-            return {k: limpiar_nan_json(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [limpiar_nan_json(v) for v in obj]
-        elif isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
-            return obj
-        else:
-            return obj
+    if "AÑOMES" not in df.columns:
+        return []
 
-    # ---- Inicializa helper y carga bases ----
-    helper = DeptoHelper(depto_helper_file)
+    dfr = df.copy()
 
-    df_deptos = pd.read_excel('DEPARTAMENTOS EN RUTAS SICE.xlsx')
-    df_bloqueos = pd.read_excel('BLOQUEOS EN VIAS COLFECAR.xlsx')
+    if codigo_objetivo is not None and "CODIGO_OBJETIVO" in dfr.columns:
+        dfr = dfr[dfr["CODIGO_OBJETIVO"] == int(codigo_objetivo)]
 
-    df_deptos.columns = [limpiar_columna(c) for c in df_deptos.columns]
-    df_bloqueos.columns = [limpiar_columna(c) for c in df_bloqueos.columns]
-    df_deptos['CODIGO_DANE_ORIGEN'] = df_deptos['CODIGO_DANE_ORIGEN'].astype(int)
-    df_deptos['CODIGO_DANE_DESTINO'] = df_deptos['CODIGO_DANE_DESTINO'].astype(int)
-    df_deptos['ID DEPTO'] = df_deptos['ID DEPTO'].astype(int)
-    df_bloqueos['ID DEPTO'] = df_bloqueos['ID DEPTO'].astype(int)
-    df_bloqueos['EFECTO TOTAL HORAS'] = pd.to_numeric(df_bloqueos['EFECTO TOTAL HORAS'], errors='coerce').fillna(0)
+    if configuracion is not None and "CONFIGURACION" in dfr.columns:
+        config = traducir_config(configuracion)
+        dfr["CONFIGURACION"] = dfr["CONFIGURACION"].astype(str).str.upper().str.strip()
+        dfr = dfr[dfr["CONFIGURACION"] == str(config).upper()]
 
-    # ---- 1. Identificar los departamentos por donde pasa la ruta (ambos sentidos) ----
-    filtro = df_deptos[
-        ((df_deptos['CODIGO_DANE_ORIGEN'] == cod_origen) & (df_deptos['CODIGO_DANE_DESTINO'] == cod_destino)) |
-        ((df_deptos['CODIGO_DANE_ORIGEN'] == cod_destino) & (df_deptos['CODIGO_DANE_DESTINO'] == cod_origen))
-    ]
+    meses = dfr["AÑOMES"].dropna().unique().tolist()
+    out = []
+    for m in meses:
+        try:
+            out.append(int(m))
+        except Exception:
+            pass
+    return sorted(list(set(out)))
 
-    if filtro.empty:
-        resultado = {
-            "total_bloqueos": 0,
-            "departamentos_ruta": [],
-            "id_departamentos_ruta": [],
-            "lista_bloqueos": [],
-            "resumen_motivos": [],
-            "total_efecto_horas": 0,
-            "riesgo_bloqueos": 0,
-            "fuente": "Datos proporcionados por Colfecar"
-        }
-        return limpiar_nan_json(resultado)
 
-    # ---- 2. Extraer todos los ID DEPTO únicos involucrados en la ruta ----
-    id_deptos_ruta = filtro['ID DEPTO'].dropna().astype(int).unique().tolist()
+# =========================================================
+# 5) RESOLVER CÓDIGOS DANE desde nombre (para estadísticas)
+# =========================================================
+def _resolver_codigo_dane(municipio: Union[int, str]) -> Optional[int]:
+    # Si ya es número, úsalo
+    try:
+        if isinstance(municipio, (int, float)):
+            return int(municipio)
+        s = str(municipio).strip()
+        if s.isdigit():
+            return int(s)
+    except Exception:
+        pass
 
-    # ---- 3. Mapear IDs a nombres oficiales usando helper ----
-    nombres_departamentos = [helper.buscar_nombre(x) or f"ID {x}" for x in id_deptos_ruta]
+    # Resolver por nombre con municipios.xlsx (match exacto normalizado)
+    df = _safe_read_excel(FILE_MUNICIPIOS)
+    if df is None:
+        return None
 
-    # ---- 4. Filtrar bloqueos para esos departamentos ----
-    bloqueos = df_bloqueos[df_bloqueos['ID DEPTO'].isin(id_deptos_ruta)]
+    # esperadas: nombre_oficial / codigo_dane (en tu excel real suele venir con esos nombres en minúscula;
+    # aquí normalizamos a mayúsculas al cargar)
+    # Intentamos varias alternativas:
+    posibles_nombre = [c for c in df.columns if c in {"NOMBRE_OFICIAL", "NOMBRE", "MUNICIPIO"}]
+    posibles_codigo = [c for c in df.columns if c in {"CODIGO_DANE", "CODIGO", "DANE"}]
 
-    if bloqueos.empty:
-        resultado = {
-            "total_bloqueos": 0,
-            "departamentos_ruta": nombres_departamentos,
-            "id_departamentos_ruta": id_deptos_ruta,
-            "lista_bloqueos": [],
-            "resumen_motivos": [],
-            "total_efecto_horas": 0,
-            "riesgo_bloqueos": 0,
-            "fuente": "Datos proporcionados por Colfecar"
-        }
-        return limpiar_nan_json(resultado)
+    if not posibles_nombre or not posibles_codigo:
+        return None
 
-    # ---- 5. Lista de bloqueos relevante ----
-    columnas = [
-        "ID DEPTO",
-        "DEPARTAMENTO",
-        "VIA AFECTADA",
-        "MOTIVO DE LA MANIFESTACION",
-        "EFECTO TOTAL HORAS",
-        "AÑOMES"
-    ]
-    # Solo deja las columnas que existan
-    columnas_existentes = [c for c in columnas if c in bloqueos.columns]
-    lista_bloqueos = bloqueos[columnas_existentes].rename(columns={
-        "ID DEPTO": "id_depto",
-        "DEPARTAMENTO": "departamento",
-        "VIA AFECTADA": "via_afectada",
-        "MOTIVO DE LA MANIFESTACION": "motivo_manifestacion",
-        "EFECTO TOTAL HORAS": "efecto_total_horas",
-        "AÑOMES": "añomes"
-    }).to_dict(orient="records")
+    col_nombre = posibles_nombre[0]
+    col_codigo = posibles_codigo[0]
 
-    # ---- 6. Resumen por motivo ----
-    motivo_col = "MOTIVO DE LA MANIFESTACION" if "MOTIVO DE LA MANIFESTACION" in bloqueos.columns else bloqueos.columns[0]  # fallback
-    resumen = (
-        bloqueos.groupby(motivo_col)
-        .agg(
-            total_eventos=pd.NamedAgg(column=motivo_col, aggfunc="count"),
-            total_efecto_horas=pd.NamedAgg(column="EFECTO TOTAL HORAS", aggfunc="sum")
+    objetivo = _norm_text(municipio)
+    aux = df.copy()
+    aux[col_nombre] = aux[col_nombre].astype(str).map(_norm_text)
+
+    hit = aux[aux[col_nombre] == objetivo]
+    if hit.empty:
+        return None
+
+    try:
+        return int(hit.iloc[0][col_codigo])
+    except Exception:
+        return None
+
+
+# =========================================================
+# 6) ESTADÍSTICAS COMPLETAS (lo que pide ATICA)
+# =========================================================
+def obtener_estadisticas_completas(origen: Union[int, str], destino: Union[int, str]) -> Dict[str, Any]:
+    """
+    Usa los 6 excels de estadísticas actuales:
+    - consolidacion_rutas_2024 / 2025 (evolución por mes/naturaleza)
+    - consolidacion_anual_mercancia_top20_2025 (top mercancías ruta)
+    - red_top20_destinos_origen_2025 (top destinos del origen)
+    - red_top20_origenes_por_destino_2025 (top orígenes del destino)
+    - consolidacion_rutas_vehiculo_2025 (distribución vehículos ruta)
+    """
+    cod_origen = _resolver_codigo_dane(origen)
+    cod_destino = _resolver_codigo_dane(destino)
+
+    if cod_origen is None or cod_destino is None:
+        return limpiar_nan_json(
+            {
+                "warning": "No se pudieron resolver códigos DANE para origen/destino. "
+                           "Pasa códigos directamente o asegúrate de que el nombre coincida con municipios.xlsx",
+                "origen": origen,
+                "destino": destino,
+                "codigo_origen": cod_origen,
+                "codigo_destino": cod_destino,
+            }
         )
-        .reset_index()
-        .rename(columns={motivo_col: "motivo"})
-        .to_dict(orient="records")
+
+    evol = obtener_evolucion_viajes_y_toneladas(cod_origen, cod_destino)
+    merc = obtener_top_mercancias_ruta(cod_origen, cod_destino, top_n=20)
+    top_dest = obtener_top_destinos(cod_origen, top_n=20)
+    top_org = obtener_top_origenes(cod_destino, top_n=20)
+    veh = obtener_distribucion_vehiculos_ruta(cod_origen, cod_destino)
+
+    return limpiar_nan_json(
+        {
+            "codigo_origen": cod_origen,
+            "codigo_destino": cod_destino,
+            "evolucion_viajes_toneladas": evol,
+            "top_mercancias_ruta_2025": merc,
+            "top_destinos_origen_2025": top_dest,
+            "top_origenes_destino_2025": top_org,
+            "distribucion_vehiculos_ruta_2025": veh,
+        }
     )
 
-    # ---- 7. Suma total de horas efecto y riesgo (frecuencia histórica de bloqueo) ----
-    total_efecto_horas = bloqueos["EFECTO TOTAL HORAS"].sum()
-    total_meses = df_bloqueos["AÑOMES"].nunique() if "AÑOMES" in df_bloqueos.columns else 1
-    meses_con_bloqueo = bloqueos["AÑOMES"].nunique() if "AÑOMES" in bloqueos.columns else 1
-    riesgo_bloqueos = meses_con_bloqueo / total_meses if total_meses > 0 else 0
 
-    resultado = {
-        "total_bloqueos": len(lista_bloqueos),
-        "departamentos_ruta": nombres_departamentos,
-        "id_departamentos_ruta": id_deptos_ruta,
-        "lista_bloqueos": lista_bloqueos,
-        "resumen_motivos": resumen,
-        "total_efecto_horas": float(total_efecto_horas),
-        "riesgo_bloqueos": round(riesgo_bloqueos, 2),
-        "fuente": "Datos proporcionados por Colfecar"
-    }
-    return limpiar_nan_json(resultado)
-    
-def obtener_estadisticas_completas(origen, destino, cod_origen, cod_destino):
-    return {
-        "EVOLUCION_MENSUAL": obtener_evolucion_viajes_y_toneladas(origen, destino),
-        "TOP_MERCANCIAS": obtener_top_mercancias_ruta(origen, destino),
-        "TOP_DESTINOS_DESDE_ORIGEN": obtener_top_destinos(cod_origen),
-        "TOP_ORIGENES_HACIA_DESTINO": obtener_top_origenes(cod_destino),
-        "DISTRIBUCION_VEHICULOS": obtener_distribucion_vehiculos_ruta(origen, destino)
-    }
+# =========================================================
+# 7) BLOQUEOS COLFECAR (opcional, robusto)
+# =========================================================
+def obtener_bloqueos_ruta_por_id(cod_origen: int, cod_destino: int, depto_helper_file: str = "DEPTO HELPER.xlsx") -> Dict[str, Any]:
+    """
+    No tumba el API si falta algún archivo/columna.
+    """
+    df_deptos = _safe_read_excel(FILE_DEPTO_RUTAS)
+    df_bloq = _safe_read_excel(FILE_BLOQUEOS)
+
+    if df_deptos is None or df_bloq is None:
+        return limpiar_nan_json(
+            {
+                "warning": "Archivos de bloqueos no disponibles",
+                "archivos": {"deptos": FILE_DEPTO_RUTAS, "bloqueos": FILE_BLOQUEOS},
+                "fuente": "Datos proporcionados por Colfecar",
+            }
+        )
+
+    # Normaliza columnas (sin tildes)
+    def _clean_col(c: str) -> str:
+        c = c.strip().upper()
+        c = "".join(ch for ch in unicodedata.normalize("NFD", c) if unicodedata.category(ch) != "Mn")
+        return c
+
+    df_deptos.columns = [_clean_col(c) for c in df_deptos.columns]
+    df_bloq.columns = [_clean_col(c) for c in df_bloq.columns]
+
+    needed_dept = {"CODIGO_DANE_ORIGEN", "CODIGO_DANE_DESTINO", "ID DEPTO"}
+    needed_bloq = {"ID DEPTO"}
+    if not needed_dept.issubset(set(df_deptos.columns)) or not needed_bloq.issubset(set(df_bloq.columns)):
+        return limpiar_nan_json(
+            {
+                "warning": "Columnas esperadas no están en archivos de bloqueos",
+                "faltantes_deptos": sorted(list(needed_dept - set(df_deptos.columns))),
+                "faltantes_bloqueos": sorted(list(needed_bloq - set(df_bloq.columns))),
+                "fuente": "Datos proporcionados por Colfecar",
+            }
+        )
+
+    # Asegura tipos
+    df_deptos = df_deptos.copy()
+    df_bloq = df_bloq.copy()
+    df_deptos["CODIGO_DANE_ORIGEN"] = pd.to_numeric(df_deptos["CODIGO_DANE_ORIGEN"], errors="coerce")
+    df_deptos["CODIGO_DANE_DESTINO"] = pd.to_numeric(df_deptos["CODIGO_DANE_DESTINO"], errors="coerce")
+    df_deptos["ID DEPTO"] = pd.to_numeric(df_deptos["ID DEPTO"], errors="coerce")
+    df_bloq["ID DEPTO"] = pd.to_numeric(df_bloq["ID DEPTO"], errors="coerce")
+
+    if "EFECTO TOTAL HORAS" in df_bloq.columns:
+        df_bloq["EFECTO TOTAL HORAS"] = pd.to_numeric(df_bloq["EFECTO TOTAL HORAS"], errors="coerce").fillna(0)
+    else:
+        df_bloq["EFECTO TOTAL HORAS"] = 0
+
+    filt = df_deptos[
+        ((df_deptos["CODIGO_DANE_ORIGEN"] == int(cod_origen)) & (df_deptos["CODIGO_DANE_DESTINO"] == int(cod_destino))) |
+        ((df_deptos["CODIGO_DANE_ORIGEN"] == int(cod_destino)) & (df_deptos["CODIGO_DANE_DESTINO"] == int(cod_origen)))
+    ]
+
+    if filt.empty:
+        return limpiar_nan_json(
+            {
+                "total_bloqueos": 0,
+                "departamentos_ruta": [],
+                "id_departamentos_ruta": [],
+                "lista_bloqueos": [],
+                "resumen_motivos": [],
+                "total_efecto_horas": 0,
+                "riesgo_bloqueos": 0,
+                "fuente": "Datos proporcionados por Colfecar",
+            }
+        )
+
+    id_deptos = filt["ID DEPTO"].dropna().astype(int).unique().tolist()
+
+    # Mapear nombres de deptos (si existe el helper)
+    nombres = []
+    try:
+        helper = DeptoHelper(depto_helper_file)
+        nombres = [helper.buscar_nombre(x) or f"ID {x}" for x in id_deptos]
+    except Exception:
+        nombres = [f"ID {x}" for x in id_deptos]
+
+    bloqueos = df_bloq[df_bloq["ID DEPTO"].isin(id_deptos)].copy()
+    total_bloqueos = int(len(bloqueos))
+
+    total_efecto = float(bloqueos["EFECTO TOTAL HORAS"].sum()) if not bloqueos.empty else 0.0
+    riesgo = round((total_efecto / max(total_bloqueos, 1)), 2) if total_bloqueos > 0 else 0.0
+
+    # Resumen motivos si existe columna MOTIVO
+    resumen = []
+    if "MOTIVO" in bloqueos.columns and not bloqueos.empty:
+        tmp = bloqueos["MOTIVO"].astype(str).value_counts().head(10)
+        resumen = [{"motivo": k, "conteo": int(v)} for k, v in tmp.items()]
+
+    return limpiar_nan_json(
+        {
+            "total_bloqueos": total_bloqueos,
+            "departamentos_ruta": nombres,
+            "id_departamentos_ruta": id_deptos,
+            "lista_bloqueos": bloqueos.head(200).to_dict(orient="records"),  # límite defensivo
+            "resumen_motivos": resumen,
+            "total_efecto_horas": total_efecto,
+            "riesgo_bloqueos": riesgo,
+            "fuente": "Datos proporcionados por Colfecar",
+        }
+    )
