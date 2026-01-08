@@ -8,7 +8,7 @@ logger = logging.getLogger("api")
 
 from sicetac_helper import SICETACHelper
 
-# ✅ MODELOS: cargado y vacío (dos funciones distintas)
+# ✅ Modelos separados: CARGADO y VACÍO
 from modelo_sicetac import calcular_modelo_sicetac_extendido
 from modelo_sicetac_vacio import calcular_modelo_sicetac_extendido_vacio
 
@@ -27,12 +27,12 @@ from estadisticas_helper import obtener_estadisticas_completas
 # =========================
 app = FastAPI(
     title="API SICETAC",
-    version="2.1.3",
+    version="2.1.4",
     description=(
         "API para cálculo de costos de transporte según metodología SICETAC. "
         "Flujo por defecto: origen+destino. "
         "id_ruta solo se usa si el usuario lo proporciona explícitamente (para forzar una vía específica). "
-        "Soporta cálculo en modo CARGADO y VACIO usando dos modelos distintos. "
+        "Calcula escenarios comparativos de horas logísticas (0, 2, 8) y soporta modo CARGADO/VACIO. "
         "Incluye valores de mercado RNDC y módulos opcionales de estadísticas y contexto."
     ),
 )
@@ -54,7 +54,7 @@ class ConsultaInput(BaseModel):
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
 
-    # ✅ el modelo espera "horas_logisticas"
+    # Opcional: si el usuario quiere comparar también un escenario personalizado
     horas_logisticas_personalizadas: float | None = None
 
     # Overrides manuales de distancias (si se suministran > 0)
@@ -65,7 +65,7 @@ class ConsultaInput(BaseModel):
     km_despavimentado: float = 0
 
     modo_viaje: str = "CARGADO"  # CARGADO | VACIO
-    estadistica: str = "Sí"      # Sí | No
+    estadistica: str = "No"      # Sí | No
 
 
 # =========================
@@ -93,10 +93,7 @@ df_rutas = pd.read_excel(ARCHIVOS["rutas"])
 # UTILS
 # =========================
 def _clean_optional_str(x: str | None) -> str | None:
-    """
-    Convierte strings vacíos/ruidosos en None:
-      "", "   ", "null", "none", "nan" -> None
-    """
+    """Convierte strings vacíos/ruidosos en None: '', 'null', 'none', 'nan' -> None"""
     if x is None:
         return None
     s = str(x).strip()
@@ -130,7 +127,6 @@ def convertir_nativos(obj):
         return obj.isoformat()
     try:
         import numpy as np
-
         if isinstance(obj, (np.integer,)):
             return int(obj)
         if isinstance(obj, (np.floating,)):
@@ -179,16 +175,6 @@ def _first_not_none(*vals):
     return None
 
 
-def _get_km_from_fila(fila_ruta) -> dict:
-    return {
-        "km_plano": float(fila_ruta.get("KM_PLANO", 0) or 0),
-        "km_ondulado": float(fila_ruta.get("KM_ONDULADO", 0) or 0),
-        "km_montañoso": float(fila_ruta.get("KM_MONTAÑOSO", 0) or 0),
-        "km_urbano": float(fila_ruta.get("KM_URBANO", 0) or 0),
-        "km_despavimentado": float(fila_ruta.get("KM_DESPAVIMENTADO", 0) or 0),
-    }
-
-
 def _sum_km(dist_dict: dict) -> float:
     return float(
         (dist_dict.get("km_plano") or 0)
@@ -220,6 +206,19 @@ def _build_info_ruta_uniforme(
         "mensaje": mensaje,
         "recomendacion": recomendacion,
     }
+
+
+def _safe_total_viaje(res: dict) -> float | None:
+    """Intenta leer el total del resultado (CARGADO o VACIO) sin asumir nombre exacto."""
+    if not isinstance(res, dict):
+        return None
+    for k in ["total_viaje", "total_viaje_vacio", "TOTAL_VIAJE", "TOTAL_VIAJE_VACIO"]:
+        if k in res and res[k] is not None:
+            try:
+                return float(res[k])
+            except Exception:
+                return None
+    return None
 
 
 # =========================
@@ -267,7 +266,14 @@ def obtener_ruta_por_id(id_ruta: str):
 
     origen_muni = helper.obtener_municipio_por_codigo(info.get("origen"))
     destino_muni = helper.obtener_municipio_por_codigo(info.get("destino"))
-    dist = _get_km_from_fila(fila_ruta)
+
+    dist = {
+        "km_plano": float(fila_ruta.get("KM_PLANO", 0) or 0),
+        "km_ondulado": float(fila_ruta.get("KM_ONDULADO", 0) or 0),
+        "km_montañoso": float(fila_ruta.get("KM_MONTAÑOSO", 0) or 0),
+        "km_urbano": float(fila_ruta.get("KM_URBANO", 0) or 0),
+        "km_despavimentado": float(fila_ruta.get("KM_DESPAVIMENTADO", 0) or 0),
+    }
 
     return JSONResponse(
         content={
@@ -296,9 +302,10 @@ def calcular_sicetac(data: ConsultaInput):
     destino = _clean_optional_str(data.destino)
 
     modo_viaje = _norm_modo_viaje(data.modo_viaje)
+    if modo_viaje not in {"CARGADO", "VACIO"}:
+        raise HTTPException(status_code=400, detail="modo_viaje inválido. Use 'CARGADO' o 'VACIO'.")
 
-    vehiculo_sicetac = _clean_optional_str(data.vehiculo) or "C3S3"
-    vehiculo_sicetac = vehiculo_sicetac.strip().upper().replace(" ", "")
+    vehiculo_sicetac = (_clean_optional_str(data.vehiculo) or "C3S3").strip().upper().replace(" ", "")
     vehiculo_stats = traducir_vehiculo_a_stats(vehiculo_sicetac)
 
     # -------------------------
@@ -317,7 +324,10 @@ def calcular_sicetac(data: ConsultaInput):
             raise HTTPException(status_code=400, detail="Debe enviar 'origen' y 'destino' o un 'id_ruta' válido.")
         fila_ruta, info_ruta = helper.buscar_ruta(origen, destino, df_rutas)
         if fila_ruta is None:
-            raise HTTPException(status_code=404, detail=info_ruta.get("error", "No se encontró ruta para origen/destino."))
+            raise HTTPException(
+                status_code=404,
+                detail=info_ruta.get("error", "No se encontró ruta para origen/destino."),
+            )
         metodo_busqueda = "por_origen_destino"
 
     # -------------------------
@@ -345,7 +355,6 @@ def calcular_sicetac(data: ConsultaInput):
                 "error": "No se pudieron resolver códigos DANE de origen/destino desde la ruta.",
                 "id_ruta_usado": id_ruta,
                 "info_ruta_keys": list(info_ruta.keys()),
-                "info_ruta": info_ruta,
             },
         )
 
@@ -372,48 +381,86 @@ def calcular_sicetac(data: ConsultaInput):
     }
 
     # -------------------------
-    # 4) Calcular SICETAC (elige modelo según modo_viaje)
+    # 4) Calcular SICETAC por escenarios (0, 2, 8 horas)
     # -------------------------
-    try:
-        if modo_viaje == "VACIO":
-            resultado = calcular_modelo_sicetac_extendido_vacio(
-                origen=origen,
-                destino=destino,
-                configuracion=vehiculo_sicetac,
-                serie=data.mes,
-                distancias=distancias_modelo,
-                valor_peaje_manual=float(data.valor_peaje_manual or 0),
-                matriz_parametros=df_parametros,
-                matriz_costos_fijos=df_costos_fijos,
-                matriz_vehicular=df_vehiculos,
-                rutas_df=df_rutas,
-                peajes_df=df_peajes,
-                carroceria_especial=data.carroceria,
-                ruta_oficial=fila_ruta,
-                horas_logisticas=data.horas_logisticas_personalizadas,  # ✅ nombre correcto
-            )
-        else:
-            resultado = calcular_modelo_sicetac_extendido(
-                origen=origen,
-                destino=destino,
-                configuracion=vehiculo_sicetac,
-                serie=data.mes,
-                distancias=distancias_modelo,
-                valor_peaje_manual=float(data.valor_peaje_manual or 0),
-                matriz_parametros=df_parametros,
-                matriz_costos_fijos=df_costos_fijos,
-                matriz_vehicular=df_vehiculos,
-                rutas_df=df_rutas,
-                peajes_df=df_peajes,
-                carroceria_especial=data.carroceria,
-                ruta_oficial=fila_ruta,
-                horas_logisticas=data.horas_logisticas_personalizadas,  # ✅ nombre correcto
-            )
+    escenarios = {
+        "0_horas": 0,
+        "2_horas": 2,
+        "8_horas": 8,
+    }
 
-        resultado = convertir_nativos(resultado)
+    # Si el usuario mandó horas personalizadas (y no está en 0/2/8), la incluimos como escenario extra
+    hp = data.horas_logisticas_personalizadas
+    if hp is not None:
+        try:
+            hpv = float(hp)
+            if hpv not in {0.0, 2.0, 8.0}:
+                escenarios["personalizado"] = hpv
+        except Exception:
+            # si viene basura, ignoramos (no tumbamos)
+            pass
+
+    resultados_escenarios: dict = {}
+
+    try:
+        for nombre, horas in escenarios.items():
+            if modo_viaje == "VACIO":
+                res = calcular_modelo_sicetac_extendido_vacio(
+                    origen=origen,
+                    destino=destino,
+                    configuracion=vehiculo_sicetac,
+                    serie=data.mes,
+                    distancias=distancias_modelo,
+                    valor_peaje_manual=float(data.valor_peaje_manual or 0),
+                    matriz_parametros=df_parametros,
+                    matriz_costos_fijos=df_costos_fijos,
+                    matriz_vehicular=df_vehiculos,
+                    rutas_df=df_rutas,
+                    peajes_df=df_peajes,
+                    carroceria_especial=data.carroceria,
+                    ruta_oficial=fila_ruta,
+                    horas_logisticas=horas,
+                )
+            else:
+                res = calcular_modelo_sicetac_extendido(
+                    origen=origen,
+                    destino=destino,
+                    configuracion=vehiculo_sicetac,
+                    serie=data.mes,
+                    distancias=distancias_modelo,
+                    valor_peaje_manual=float(data.valor_peaje_manual or 0),
+                    matriz_parametros=df_parametros,
+                    matriz_costos_fijos=df_costos_fijos,
+                    matriz_vehicular=df_vehiculos,
+                    rutas_df=df_rutas,
+                    peajes_df=df_peajes,
+                    carroceria_especial=data.carroceria,
+                    ruta_oficial=fila_ruta,
+                    horas_logisticas=horas,
+                )
+
+            resultados_escenarios[nombre] = convertir_nativos(res)
+
     except Exception as e:
-        logger.exception("Fallo cálculo SICETAC")
-        raise HTTPException(status_code=500, detail=f"Error calculando SICETAC: {str(e)}")
+        logger.exception("Fallo cálculo SICETAC por escenarios")
+        raise HTTPException(status_code=500, detail=f"Error calculando SICETAC (escenarios): {str(e)}")
+
+    # Comparativo rápido (deltas) para consumo del GPT (sin depender del nombre exacto del campo)
+    t0 = _safe_total_viaje(resultados_escenarios.get("0_horas", {}))
+    t2 = _safe_total_viaje(resultados_escenarios.get("2_horas", {}))
+    t8 = _safe_total_viaje(resultados_escenarios.get("8_horas", {}))
+
+    comparativo = {
+        "total_0_horas": t0,
+        "total_2_horas": t2,
+        "total_8_horas": t8,
+        "delta_0_a_2": (t2 - t0) if (t0 is not None and t2 is not None) else None,
+        "delta_2_a_8": (t8 - t2) if (t8 is not None and t2 is not None) else None,
+        "delta_0_a_8": (t8 - t0) if (t0 is not None and t8 is not None) else None,
+    }
+
+    # Por compatibilidad: SICETAC “principal” = escenario 2 horas (siempre existe)
+    sicetac_principal = resultados_escenarios.get("2_horas") or resultados_escenarios.get("0_horas")
 
     # -------------------------
     # 4.1) Valores mercado RNDC (usa vehiculo_stats sin C)
@@ -430,7 +477,7 @@ def calcular_sicetac(data: ConsultaInput):
     # -------------------------
     ruta_id_usada = None
     id_principal = None
-    ids_alternativos = []
+    ids_alternativos: list[str] = []
 
     if metodo_busqueda == "directo_por_id":
         ruta_id_usada = id_ruta
@@ -465,7 +512,10 @@ def calcular_sicetac(data: ConsultaInput):
     )
 
     respuesta = {
-        "SICETAC": resultado,
+        # ✅ Principal (2 horas) + ✅ escenarios completos
+        "SICETAC": sicetac_principal,
+        "SICETAC_ESCENARIOS": resultados_escenarios,
+        "COMPARATIVO_HORAS": comparativo,
         "MODO_VIAJE": modo_viaje,
         "VALOR_MERCADO_RNDC": valor_mercado,
         "INFO_RUTA": info_ruta_uniforme,
@@ -493,7 +543,11 @@ def calcular_sicetac(data: ConsultaInput):
             }
         except Exception as e:
             logger.exception("Fallo en contexto_helper")
-            respuesta["CONTEXTO"] = {"warning": "No se pudo generar contexto", "error": str(e), "vehiculo_stats": vehiculo_stats}
+            respuesta["CONTEXTO"] = {
+                "warning": "No se pudo generar contexto",
+                "error": str(e),
+                "vehiculo_stats": vehiculo_stats,
+            }
 
     return JSONResponse(content=respuesta)
 
@@ -508,9 +562,9 @@ def head_root():
 
 @app.get("/")
 def root():
-    return {"message": "API SICETAC", "version": "2.1.3"}
+    return {"message": "API SICETAC", "version": "2.1.4"}
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "version": "2.1.3"}
+    return {"status": "healthy", "version": "2.1.4"}
