@@ -1,21 +1,30 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from fastapi.responses import JSONResponse
+# main.py
+from __future__ import annotations
+
+import logging
 
 import pandas as pd
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
 from sicetac_helper import SICETACHelper
 from modelo_sicetac import calcular_modelo_sicetac_extendido
 from modelo_sicetac_vacio import calcular_modelo_sicetac_extendido_vacio
 from contexto_helper import obtener_valores_promedio_mercado_por_llave
 
-# Importación robusta del set_modo_viaje
+# Importación robusta del set_modo_viaje (si existe)
 try:
     from contexto_helper import set_modo_viaje
 except ImportError:
     def set_modo_viaje(_):
         return None
 
-app = FastAPI(title="API SICETAC LIGHT", version="1.0")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("api")
+
+app = FastAPI(title="API SICETAC LIGHT", version="1.1")
 
 
 class ConsultaInput(BaseModel):
@@ -26,7 +35,7 @@ class ConsultaInput(BaseModel):
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
 
-    # Campos legacy, pero aquí NO usamos horas del usuario: siempre 0, 2, 8
+    # Campos legacy (no usados en light para horas): siempre 0,2,8
     horas_logisticas: float | None = None
     horas_logisticas_personalizadas: float | None = None
     tarifa_standby: float = 150000.0
@@ -50,7 +59,7 @@ ARCHIVOS = {
     "rutas": "RUTA_DISTANCIA_LIMPIO.xlsx",
 }
 
-# Carga fija (igual que en el main completo)
+# Carga fija
 helper = SICETACHelper(ARCHIVOS["municipios"])
 df_vehiculos = pd.read_excel(ARCHIVOS["vehiculos"])
 df_parametros = pd.read_excel(ARCHIVOS["parametros"])
@@ -62,62 +71,53 @@ df_rutas = pd.read_excel(ARCHIVOS["rutas"])
 def convertir_nativos(d):
     if isinstance(d, dict):
         return {k: convertir_nativos(v) for k, v in d.items()}
-    elif isinstance(d, list):
+    if isinstance(d, list):
         return [convertir_nativos(v) for v in d]
-    elif hasattr(d, "item"):
-        return d.item()
-    else:
-        return d
+    if hasattr(d, "item"):
+        try:
+            return d.item()
+        except Exception:
+            return d
+    return d
 
-
-# ----------------- Helpers para extraer campos clave -----------------
 
 def inferir_distancia_total(resultado: dict | None) -> float | None:
-    """Intenta encontrar la distancia total en km en el resultado SICETAC."""
     if not resultado:
         return None
-
-    # Intenta claves típicas
+    # Busca claves con "dist" y "km"
     for key in resultado.keys():
-        kl = key.lower()
+        kl = str(key).lower()
         if "dist" in kl and "km" in kl:
             try:
                 return float(resultado[key])
             except Exception:
                 continue
-
-    # Si tienes el nombre exacto (por ejemplo 'distancia_total_km'), puedes forzarlo:
+    # fallback por nombres comunes
     for nombre in ["distancia_total_km", "dist_total_km", "km_totales"]:
         if nombre in resultado:
             try:
                 return float(resultado[nombre])
             except Exception:
                 pass
-
     return None
 
 
 def inferir_total_peajes(resultado: dict | None) -> float | None:
-    """Intenta encontrar el total de peajes en el resultado SICETAC."""
     if not resultado:
         return None
-
     for key in resultado.keys():
-        kl = key.lower()
+        kl = str(key).lower()
         if "peaje" in kl and ("total" in kl or "costo" in kl):
             try:
                 return float(resultado[key])
             except Exception:
                 continue
-
-    # Si conoces el nombre exacto, ponlo aquí
     for nombre in ["total_peajes", "costo_peajes"]:
         if nombre in resultado:
             try:
                 return float(resultado[nombre])
             except Exception:
                 pass
-
     return None
 
 
@@ -137,13 +137,12 @@ def extraer_total_viaje(resultado: dict | None) -> float | None:
     return None
 
 
-# ----------------- Núcleo de cálculo para una sola corrida -----------------
+def _vehiculo_analisis_sin_c(v: str) -> str:
+    # Para llaves mercado: config sin 'C' (ej: C3S3 -> 3S3)
+    return str(v).strip().upper().replace(" ", "").replace("C", "")
+
 
 def _calcular_sicetac_base(data: ConsultaInput, horas_logisticas_modelo: float):
-    """
-    Ejecuta el modelo SICETAC (cargado o vacío) para un valor dado de horas_logisticas.
-    Devuelve el dict completo del modelo y datos básicos de la ruta.
-    """
     # Buscar municipios
     origen_info = helper.buscar_municipio(data.origen)
     destino_info = helper.buscar_municipio(data.destino)
@@ -154,7 +153,7 @@ def _calcular_sicetac_base(data: ConsultaInput, horas_logisticas_modelo: float):
     cod_origen = origen_info["codigo_dane"]
     cod_destino = destino_info["codigo_dane"]
 
-    # Buscar ruta
+    # Buscar ruta (aprox)
     fila_ruta, info_aprox = helper.buscar_ruta_con_aproximacion(
         data.origen,
         data.destino,
@@ -163,15 +162,7 @@ def _calcular_sicetac_base(data: ConsultaInput, horas_logisticas_modelo: float):
 
     if fila_ruta is None:
         # Ruta no encontrada: usar distancias manuales si las hay
-        if any(
-            [
-                data.km_plano,
-                data.km_ondulado,
-                data.km_montañoso,
-                data.km_urbano,
-                data.km_despavimentado,
-            ]
-        ):
+        if any([data.km_plano, data.km_ondulado, data.km_montañoso, data.km_urbano, data.km_despavimentado]):
             distancias = {
                 "KM_PLANO": data.km_plano,
                 "KM_ONDULADO": data.km_ondulado,
@@ -180,12 +171,10 @@ def _calcular_sicetac_base(data: ConsultaInput, horas_logisticas_modelo: float):
                 "KM_DESPAVIMENTADO": data.km_despavimentado,
             }
         else:
+            motivo = (info_aprox.get("motivo", "") if isinstance(info_aprox, dict) else "")
             raise HTTPException(
                 status_code=404,
-                detail=(
-                    "Ruta no registrada en SICETAC y sin distancias manuales. "
-                    f"Detalle: {info_aprox.get('motivo', '') if info_aprox else ''}"
-                ),
+                detail=("Ruta no registrada en SICETAC y sin distancias manuales. " f"Detalle: {motivo}"),
             )
     else:
         distancias = {
@@ -197,34 +186,24 @@ def _calcular_sicetac_base(data: ConsultaInput, horas_logisticas_modelo: float):
         }
 
     # Validar vehículo y mes
-    vehiculo_upper = data.vehiculo.strip().upper().replace("C", "")
+    vehiculo_upper = _vehiculo_analisis_sin_c(data.vehiculo)
     vehiculos_validos = (
-        df_vehiculos["TIPO_VEHICULO"]
-        .astype(str)
-        .str.upper()
-        .str.replace("C", "")
-        .unique()
+        df_vehiculos["TIPO_VEHICULO"].astype(str).str.upper().str.replace(" ", "").str.replace("C", "").unique()
     )
     if vehiculo_upper not in vehiculos_validos:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Vehículo '{data.vehiculo}' no encontrado. "
-                f"Opciones válidas: {', '.join(vehiculos_validos)}"
-            ),
+            detail=(f"Vehículo '{data.vehiculo}' no encontrado. Opciones válidas: {', '.join(vehiculos_validos)}"),
         )
 
     meses_validos = df_parametros["MES"].unique().tolist()
     if int(data.mes) not in meses_validos:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Mes '{data.mes}' no válido. Debe ser uno de: {meses_validos}",
-        )
+        raise HTTPException(status_code=400, detail=f"Mes '{data.mes}' no válido. Debe ser uno de: {meses_validos}")
 
     set_modo_viaje(data.modo_viaje)
 
     # Ejecutar el modelo
-    if data.modo_viaje.upper() == "VACIO":
+    if str(data.modo_viaje).strip().upper() in {"VACIO", "VACÍO"}:
         resultado = calcular_modelo_sicetac_extendido_vacio(
             origen=data.origen,
             destino=data.destino,
@@ -259,7 +238,8 @@ def _calcular_sicetac_base(data: ConsultaInput, horas_logisticas_modelo: float):
             horas_logisticas=horas_logisticas_modelo,
         )
 
-    if resultado is not None and "total_viaje" not in resultado and "total_viaje_vacio" in resultado:
+    # Normalizar total_viaje si viene como total_viaje_vacio
+    if isinstance(resultado, dict) and "total_viaje" not in resultado and "total_viaje_vacio" in resultado:
         resultado["total_viaje"] = resultado["total_viaje_vacio"]
 
     return {
@@ -271,21 +251,18 @@ def _calcular_sicetac_base(data: ConsultaInput, horas_logisticas_modelo: float):
     }
 
 
-# ----------------- Endpoint LIGHT principal -----------------
-
 @app.post("/consulta")
 def calcular_sicetac_light(data: ConsultaInput):
     """
     Versión LIGHT:
     - Ejecuta SICETAC con 0h, 2h y 8h de horas_logisticas.
     - Devuelve:
-        * distancia total
-        * total de peajes
+        * distancia total (si se puede inferir)
+        * total peajes (si se puede inferir)
         * total del viaje para cada escenario
-        * último valor de mercado disponible
+        * último valor de mercado disponible (si existe)
     """
     try:
-        # Tres corridas: 0h, 2h, 8h
         core_0 = _calcular_sicetac_base(data, horas_logisticas_modelo=0.0)
         core_2 = _calcular_sicetac_base(data, horas_logisticas_modelo=2.0)
         core_8 = _calcular_sicetac_base(data, horas_logisticas_modelo=8.0)
@@ -294,7 +271,6 @@ def calcular_sicetac_light(data: ConsultaInput):
         res_2 = core_2["resultado"]
         res_8 = core_8["resultado"]
 
-        # Distancia y peajes: tomamos los del escenario de 2h (para no usar 0h vacío)
         distancia_total = inferir_distancia_total(res_2)
         total_peajes = inferir_total_peajes(res_2)
 
@@ -308,53 +284,51 @@ def calcular_sicetac_light(data: ConsultaInput):
             "total_peajes": total_peajes,
         }
 
-        # Costos totales por escenario
         costos = {
-            "H0": {
-                "horas_logisticas": 0,
-                "total_viaje": extraer_total_viaje(res_0),
-            },
-            "H2": {
-                "horas_logisticas": 2,
-                "total_viaje": extraer_total_viaje(res_2),
-            },
-            "H8": {
-                "horas_logisticas": 8,
-                "total_viaje": extraer_total_viaje(res_8),
-            },
+            "H0": {"horas_logisticas": 0, "total_viaje": extraer_total_viaje(res_0)},
+            "H2": {"horas_logisticas": 2, "total_viaje": extraer_total_viaje(res_2)},
+            "H8": {"horas_logisticas": 8, "total_viaje": extraer_total_viaje(res_8)},
         }
 
-        # Último dato de mercado
+        # Mercado (NO puede tumbar el resultado)
         cod_origen = core_0["cod_origen"]
         cod_destino = core_0["cod_destino"]
-        vehiculo_upper = data.vehiculo.strip().upper().replace("C", "")
-        ruta_config = f"{cod_origen}-{cod_destino}-{vehiculo_upper}"
+        vehiculo_upper = _vehiculo_analisis_sin_c(data.vehiculo)
+        ruta_config = f"{cod_origen}-{cod_destino}-{vehiculo_upper}"  # ✅ SIEMPRE '-'
 
         try:
-            historico_mercado = obtener_valores_promedio_mercado_por_llave(
-                ruta_config
-            )
-        except Exception:
-            historico_mercado = None
+            historico_mercado = obtener_valores_promedio_mercado_por_llave(ruta_config)
+        except Exception as e:
+            logger.warning(f"⚠️ Mercado falló para {ruta_config}: {e}")
+            historico_mercado = []
 
         mercado_ultimo = None
-        if historico_mercado:
-            # Si es lista, tomamos el último elemento
-            if isinstance(historico_mercado, list):
-                mercado_ultimo = convertir_nativos(historico_mercado[-1])
-            else:
-                # Si es dict o algo similar, lo devolvemos completo
-                mercado_ultimo = convertir_nativos(historico_mercado)
+        if historico_mercado and isinstance(historico_mercado, list):
+            mercado_ultimo = convertir_nativos(historico_mercado[-1])
 
         respuesta = {
             "ruta": convertir_nativos(ruta),
             "costos": convertir_nativos(costos),
             "mercado_ultimo": mercado_ultimo,
         }
-
         return JSONResponse(content=respuesta)
 
     except HTTPException as ex:
         raise ex
     except Exception as e:
+        logger.exception("❌ Error interno en /consulta")
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+# --- Endpoints útiles para Render ---
+@app.head("/")
+def head_root():
+    return Response(status_code=200)
+
+@app.get("/")
+def root():
+    return {"message": "API SICETAC LIGHT", "version": "1.1"}
+
+@app.get("/health")
+def health():
+    return {"status": "healthy", "version": "1.1"}
