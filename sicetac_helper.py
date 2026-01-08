@@ -8,13 +8,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
-
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
 def _norm_text(s: Any) -> str:
-    """Normaliza texto: mayúsculas, sin tildes, espacios compactos."""
     s = "" if s is None else str(s)
     s = s.strip().upper()
     s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
@@ -23,7 +21,6 @@ def _norm_text(s: Any) -> str:
 
 
 def _to_native(x: Any) -> Any:
-    """Convierte tipos numpy/pandas a tipos nativos para JSON."""
     try:
         if hasattr(x, "item"):
             return x.item()
@@ -43,30 +40,28 @@ def _safe_int(x: Any) -> Optional[int]:
 
 class SICETACHelper:
     """
-    Helper núcleo:
-    1) Resolver municipios (nombre -> código DANE)
-    2) Buscar rutas directas (cod_origen -> cod_destino) en df_rutas
-    3) Ordenar por ID_SICE asc y escoger la principal + alternativas
-
-    NOTA: df_rutas se pasa como argumento (no se carga aquí).
+    Core:
+    - Buscar municipios por nombre -> código DANE
+    - Buscar rutas SOLO directas (origen->destino)
+    - Ordenar por ID_SICE asc (vía principal = ID menor)
+    - Exponer métodos compatibles con tu main.py:
+        - buscar_todas_las_rutas(origen, destino, df_rutas)
+        - buscar_todas_las_rutas_por_codigos(cod_origen, cod_destino, df_rutas)
+        - buscar_ruta(origen, destino, df_rutas)
+        - buscar_ruta_por_id(id_ruta, df_rutas)
+        - obtener_municipio_por_codigo(codigo_dane)
     """
 
     def __init__(self, municipios_xlsx_path: str):
         self.municipios_path = municipios_xlsx_path
         self.df_municipios = pd.read_excel(municipios_xlsx_path)
-
-        # Normaliza nombres de columnas a minúscula para acceso robusto
         self.df_municipios.columns = [str(c).strip().lower() for c in self.df_municipios.columns]
 
-        # Detecta columnas probables
         self.col_codigo = self._find_col(self.df_municipios, ["codigo_dane", "codigo", "dane"])
         self.col_depto = self._find_col(self.df_municipios, ["departamento", "depto"])
         self.col_nombre_oficial = self._find_col(self.df_municipios, ["nombre_oficial", "nombre", "municipio"])
-
-        # Variaciones (si existen)
         self.col_variaciones = [c for c in self.df_municipios.columns if c.startswith("variacion")]
 
-        # Crea columna normalizada para búsqueda rápida
         if self.col_nombre_oficial:
             self.df_municipios["_nombre_norm"] = self.df_municipios[self.col_nombre_oficial].map(_norm_text)
         else:
@@ -75,8 +70,10 @@ class SICETACHelper:
         for c in self.col_variaciones:
             self.df_municipios[f"_{c}_norm"] = self.df_municipios[c].map(_norm_text)
 
-        logger.info("✅ Municipios cargados. Columnas detectadas: codigo=%s, depto=%s, nombre=%s, variaciones=%s",
-                    self.col_codigo, self.col_depto, self.col_nombre_oficial, self.col_variaciones)
+        logger.info(
+            "✅ Municipios cargados. Columnas detectadas: codigo=%s, depto=%s, nombre=%s, variaciones=%s",
+            self.col_codigo, self.col_depto, self.col_nombre_oficial, self.col_variaciones
+        )
 
     @staticmethod
     def _find_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
@@ -90,25 +87,17 @@ class SICETACHelper:
     # Municipios
     # -------------------------
     def buscar_municipio(self, nombre: str, cutoff: float = 0.86) -> Optional[Dict[str, Any]]:
-        """
-        Busca municipio por:
-        1) match exacto en nombre_oficial
-        2) match exacto en variaciones
-        3) match aproximado (difflib) sobre nombre_oficial + variaciones
-
-        Retorna dict con: codigo_dane, departamento, nombre_oficial, coincidencia_aproximada (si aplica)
-        """
         if not nombre or not self.col_codigo or not self.col_nombre_oficial:
             return None
 
         objetivo = _norm_text(nombre)
 
-        # 1) Exacto en nombre oficial
+        # 1) Exacto nombre oficial
         hit = self.df_municipios[self.df_municipios["_nombre_norm"] == objetivo]
         if not hit.empty:
             fila = hit.iloc[0]
             res = self._fila_municipio_a_dict(fila)
-            logger.info("✓ Municipio encontrado (exacto nombre): %s", res)
+            logger.info("✓ Municipio encontrado: %s", res)
             return res
 
         # 2) Exacto en variaciones
@@ -119,10 +108,10 @@ class SICETACHelper:
                 fila = hit.iloc[0]
                 res = self._fila_municipio_a_dict(fila)
                 res["coincidencia_aproximada"] = str(nombre).strip()
-                logger.info("✓ Municipio encontrado (variación): %s", res)
+                logger.info("✓ Municipio encontrado: %s", res)
                 return res
 
-        # 3) Aproximado (difflib) en un listado
+        # 3) Aproximado
         candidatos = list(self.df_municipios["_nombre_norm"].dropna().unique())
         for c in self.col_variaciones:
             candidatos += list(self.df_municipios[f"_{c}_norm"].dropna().unique())
@@ -133,8 +122,6 @@ class SICETACHelper:
             return None
 
         mejor = posibles[0]
-
-        # Encontrar la fila que tenga ese match en nombre oficial o en variaciones
         hit = self.df_municipios[self.df_municipios["_nombre_norm"] == mejor]
         if hit.empty:
             for c in self.col_variaciones:
@@ -149,7 +136,7 @@ class SICETACHelper:
         fila = hit.iloc[0]
         res = self._fila_municipio_a_dict(fila)
         res["coincidencia_aproximada"] = mejor
-        logger.info("✓ Municipio encontrado (aproximado): %s", res)
+        logger.info("✓ Municipio encontrado: %s", res)
         return res
 
     def obtener_municipio_por_codigo(self, codigo_dane: Union[int, str]) -> Optional[Dict[str, Any]]:
@@ -177,11 +164,7 @@ class SICETACHelper:
     # Rutas (df_rutas externo)
     # -------------------------
     @staticmethod
-    def _detect_route_cols(df_rutas: pd.DataFrame) -> Dict[str, str]:
-        """
-        Detecta columnas clave en df_rutas (robusto a mayúsculas/minúsculas).
-        Devuelve mapeo canonico -> nombre real de columna.
-        """
+    def _detect_route_cols(df_rutas: pd.DataFrame) -> Dict[str, Optional[str]]:
         cols = {str(c).strip().upper(): c for c in df_rutas.columns}
 
         def pick(options: List[str]) -> Optional[str]:
@@ -190,23 +173,22 @@ class SICETACHelper:
                     return cols[o]
             return None
 
-        mapping = {
+        return {
             "COD_ORIGEN": pick(["CODIGO_DANE_ORIGEN", "COD_DANE_ORIGEN", "CODIGO_ORIGEN", "COD_ORIGEN"]),
             "COD_DESTINO": pick(["CODIGO_DANE_DESTINO", "COD_DANE_DESTINO", "CODIGO_DESTINO", "COD_DESTINO"]),
             "ID_SICE": pick(["ID_SICE", "ID", "IDSICE"]),
             "RUTA": pick(["RUTA"]),
             "VIA": pick(["VIA"]),
-            "NOMBRE_SICE": pick(["NOMBRE_SICE", "NOMBRE", "NOMBRE_VIA"]),
+            "NOMBRE_SICE": pick(["NOMBRE_SICE", "NOMBRE", "NOMBRE_VIA", "NOMBRE_RUTA"]),
             "KM_PLANO": pick(["KM_PLANO"]),
             "KM_ONDULADO": pick(["KM_ONDULADO"]),
             "KM_MONTAÑOSO": pick(["KM_MONTAÑOSO", "KM_MONTANOSO"]),
             "KM_URBANO": pick(["KM_URBANO"]),
             "KM_DESPAV": pick(["KM_DESPAVIMENTADO", "KM_DESPAV", "KM_DESTAPADO"]),
         }
-        return mapping
 
     @staticmethod
-    def _km_total_from_row(row: pd.Series, m: Dict[str, str]) -> float:
+    def _km_total_from_row(row: pd.Series, m: Dict[str, Optional[str]]) -> float:
         def g(key: str) -> float:
             col = m.get(key)
             v = row.get(col, 0) if col else 0
@@ -216,6 +198,46 @@ class SICETACHelper:
                 return 0.0
 
         return g("KM_PLANO") + g("KM_ONDULADO") + g("KM_MONTAÑOSO") + g("KM_URBANO") + g("KM_DESPAV")
+
+    # ✅ ESTE ES EL MÉTODO QUE TU main.py ESPERA
+    def buscar_todas_las_rutas(
+        self,
+        origen: str,
+        destino: str,
+        df_rutas: pd.DataFrame
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Compatibilidad con main.py:
+        - recibe nombres de municipios
+        - resuelve códigos DANE
+        - busca rutas directas por códigos
+        - retorna lista y un dict info con origen_nombre/destino_nombre
+        """
+        mun_origen = self.buscar_municipio(origen)
+        mun_destino = self.buscar_municipio(destino)
+
+        if not mun_origen or not mun_destino:
+            return [], {
+                "mensaje": "No se encontró origen o destino en municipios",
+                "origen_nombre": origen,
+                "destino_nombre": destino,
+                "origen": mun_origen,
+                "destino": mun_destino
+            }
+
+        cod_origen = int(mun_origen["codigo_dane"])
+        cod_destino = int(mun_destino["codigo_dane"])
+
+        rutas, info_cod = self.buscar_todas_las_rutas_por_codigos(cod_origen, cod_destino, df_rutas)
+
+        info = {
+            "origen_nombre": mun_origen.get("nombre_oficial"),
+            "destino_nombre": mun_destino.get("nombre_oficial"),
+            "origen_codigo": cod_origen,
+            "destino_codigo": cod_destino,
+            **info_cod
+        }
+        return rutas, info
 
     def buscar_todas_las_rutas_por_codigos(
         self,
@@ -228,13 +250,10 @@ class SICETACHelper:
         Retorna lista ordenada por ID_SICE asc (principal primero) + info.
         """
         m = self._detect_route_cols(df_rutas)
-
         if not m["COD_ORIGEN"] or not m["COD_DESTINO"]:
             return [], {"mensaje": "No se detectaron columnas de origen/destino en df_rutas", "detected": m}
 
         dfr = df_rutas.copy()
-
-        # Asegura numéricos comparables
         dfr["_COD_O"] = pd.to_numeric(dfr[m["COD_ORIGEN"]], errors="coerce")
         dfr["_COD_D"] = pd.to_numeric(dfr[m["COD_DESTINO"]], errors="coerce")
 
@@ -246,7 +265,7 @@ class SICETACHelper:
                 "destino": int(cod_destino),
             }
 
-        # Orden por ID_SICE asc (si existe); si no, por km_total asc como fallback
+        # Orden por ID asc (ruta principal = menor ID)
         if m["ID_SICE"]:
             hit["_ID"] = pd.to_numeric(hit[m["ID_SICE"]], errors="coerce")
             hit = hit.sort_values(["_ID"], ascending=True)
@@ -256,23 +275,20 @@ class SICETACHelper:
 
         rutas: List[Dict[str, Any]] = []
         for _, row in hit.iterrows():
-            ruta_info: Dict[str, Any] = {
+            rutas.append({
                 "ID_SICE": _to_native(row.get(m["ID_SICE"])) if m["ID_SICE"] else None,
                 "RUTA": _to_native(row.get(m["RUTA"])) if m["RUTA"] else f"{cod_origen}-{cod_destino}",
                 "VIA": _to_native(row.get(m["VIA"])) if m["VIA"] else None,
                 "NOMBRE_SICE": _to_native(row.get(m["NOMBRE_SICE"])) if m["NOMBRE_SICE"] else None,
                 "km_total": float(self._km_total_from_row(row, m)),
-                "distancias": {
-                    "KM_PLANO": float(row.get(m["KM_PLANO"], 0) if m["KM_PLANO"] else 0),
-                    "KM_ONDULADO": float(row.get(m["KM_ONDULADO"], 0) if m["KM_ONDULADO"] else 0),
-                    "KM_MONTAÑOSO": float(row.get(m["KM_MONTAÑOSO"], 0) if m["KM_MONTAÑOSO"] else 0),
-                    "KM_URBANO": float(row.get(m["KM_URBANO"], 0) if m["KM_URBANO"] else 0),
-                    "KM_DESPAVIMENTADO": float(row.get(m["KM_DESPAV"], 0) if m["KM_DESPAV"] else 0),
-                }
-            }
-            rutas.append(ruta_info)
+                "KM_PLANO": float(row.get(m["KM_PLANO"], 0) if m["KM_PLANO"] else 0),
+                "KM_ONDULADO": float(row.get(m["KM_ONDULADO"], 0) if m["KM_ONDULADO"] else 0),
+                "KM_MONTAÑOSO": float(row.get(m["KM_MONTAÑOSO"], 0) if m["KM_MONTAÑOSO"] else 0),
+                "KM_URBANO": float(row.get(m["KM_URBANO"], 0) if m["KM_URBANO"] else 0),
+                "KM_DESPAVIMENTADO": float(row.get(m["KM_DESPAV"], 0) if m["KM_DESPAV"] else 0),
+            })
 
-        info = {
+        return rutas, {
             "mensaje": "Rutas encontradas para el sentido origen→destino",
             "origen": int(cod_origen),
             "destino": int(cod_destino),
@@ -280,7 +296,6 @@ class SICETACHelper:
             "id_principal": rutas[0].get("ID_SICE"),
             "ids_alternativos": [r.get("ID_SICE") for r in rutas[1:]],
         }
-        return rutas, info
 
     def buscar_ruta(
         self,
@@ -289,52 +304,25 @@ class SICETACHelper:
         df_rutas: pd.DataFrame
     ) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
         """
-        Flujo núcleo:
-        - resuelve municipios -> códigos DANE
-        - busca rutas directas por códigos
-        - escoge ID menor (principal)
-        Retorna:
-          fila_ruta_principal (pd.Series) y info con alternativas
+        Flujo completo: municipio -> códigos -> rutas -> fila principal + alternativas
         """
-        mun_origen = self.buscar_municipio(origen)
-        mun_destino = self.buscar_municipio(destino)
-
-        if not mun_origen or not mun_destino:
-            return None, {
-                "error": "No se encontró el municipio de origen o destino",
-                "origen": mun_origen,
-                "destino": mun_destino,
-            }
-
-        cod_origen = int(mun_origen["codigo_dane"])
-        cod_destino = int(mun_destino["codigo_dane"])
-
-        rutas, info_rutas = self.buscar_todas_las_rutas_por_codigos(cod_origen, cod_destino, df_rutas)
-
+        rutas, info = self.buscar_todas_las_rutas(origen, destino, df_rutas)
         if not rutas:
-            return None, {
-                "error": "Ruta no encontrada en SICETAC para el sentido origen→destino",
-                "origen": mun_origen,
-                "destino": mun_destino,
-                "detalle": info_rutas,
-            }
+            return None, {"error": "No se encontró ruta", "detalle": info}
 
         id_principal = rutas[0].get("ID_SICE")
-        fila_ruta, info_id = self.buscar_ruta_por_id(str(id_principal), df_rutas)
+        fila, info_id = self.buscar_ruta_por_id(str(id_principal), df_rutas)
 
-        info = {
-            "origen": mun_origen,
-            "destino": mun_destino,
+        return fila, {
             "ruta_principal": rutas[0],
             "rutas_alternativas": rutas[1:],
-            "detalle_rutas": info_rutas,
+            "detalle_rutas": info,
             "detalle_busqueda_id": info_id,
         }
-        return fila_ruta, info
 
     def buscar_ruta_por_id(self, id_ruta: str, df_rutas: pd.DataFrame) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
         """
-        Busca una fila por ID_SICE (exacto).
+        Busca una fila por ID_SICE. Devuelve también origen/destino si existen columnas.
         """
         m = self._detect_route_cols(df_rutas)
         if not m["ID_SICE"]:
@@ -353,8 +341,15 @@ class SICETACHelper:
             return None, {"error": "No se encontró ruta con ese ID", "id_ruta": target}
 
         fila = hit.iloc[0]
+
+        # Si existen columnas de origen/destino, exponerlas (tu main a veces lo usa)
+        origen = _safe_int(fila.get(m["COD_ORIGEN"])) if m["COD_ORIGEN"] else None
+        destino = _safe_int(fila.get(m["COD_DESTINO"])) if m["COD_DESTINO"] else None
+
         info = {
             "id_sice": target,
+            "origen": origen,
+            "destino": destino,
             "ruta": _to_native(fila.get(m["RUTA"])) if m["RUTA"] else None,
             "via": _to_native(fila.get(m["VIA"])) if m["VIA"] else None,
             "nombre_sice": _to_native(fila.get(m["NOMBRE_SICE"])) if m["NOMBRE_SICE"] else None,
