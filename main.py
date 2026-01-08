@@ -23,22 +23,16 @@ app = FastAPI(title="API SICETAC", version="2.1.0")
 # MODELO INPUT
 # =========================
 class ConsultaInput(BaseModel):
-    # 🔥 OPCIONES MUTUAMENTE EXCLUYENTES
-    # Opción 1: Buscar por origen/destino
     origen: str | None = None
     destino: str | None = None
-
-    # Opción 2: Usar ID de ruta directamente (MÁS RÁPIDO)
     id_ruta: str | None = None
 
-    # Resto de parámetros
     vehiculo: str = "C3S3"
     mes: int = 202601
     carroceria: str = "GENERAL"
     valor_peaje_manual: float = 0.0
     horas_logisticas_personalizadas: float | None = None
 
-    # Distancias manuales (solo si no hay ruta)
     km_plano: float = 0
     km_ondulado: float = 0
     km_montañoso: float = 0
@@ -79,6 +73,7 @@ def estadistica_activado(valor):
         return False
     return str(valor).strip().lower().replace("í", "i") in ["si", "sí", "true", "1"]
 
+
 def convertir_nativos(obj):
     if isinstance(obj, dict):
         return {k: convertir_nativos(v) for k, v in obj.items()}
@@ -88,15 +83,38 @@ def convertir_nativos(obj):
         return obj.item()
     return obj
 
+
+def traducir_configuracion_analisis(vehiculo_sicetac: str) -> str:
+    """
+    Traduce configuración de SICETAC (ej. C3S3) a configuración usada en estadísticas (ej. 3S3),
+    usando el archivo CONFIGURACION_VEHICULAR_LIMPIO.xlsx (col: CONFIGURACION_ANALISIS).
+
+    Fallback: quita 'C'.
+    """
+    v = (vehiculo_sicetac or "").strip().upper().replace(" ", "")
+    if df_vehiculos is None or df_vehiculos.empty:
+        return v.replace("C", "")
+
+    tmp = df_vehiculos.copy()
+    tmp.columns = [str(c).strip().upper() for c in tmp.columns]
+
+    if "TIPO_VEHICULO" not in tmp.columns or "CONFIGURACION_ANALISIS" not in tmp.columns:
+        return v.replace("C", "")
+
+    tmp["TIPO_VEHICULO"] = tmp["TIPO_VEHICULO"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
+    tmp["CONFIGURACION_ANALISIS"] = tmp["CONFIGURACION_ANALISIS"].astype(str).str.upper().str.strip().str.replace(" ", "", regex=False)
+
+    hit = tmp[tmp["TIPO_VEHICULO"] == v]
+    if hit.empty:
+        return v.replace("C", "")
+
+    return str(hit.iloc[0]["CONFIGURACION_ANALISIS"]).strip().upper().replace(" ", "").replace("C", "")
+
+
 def obtener_nombre_ruta(fila_ruta):
-    """
-    Genera un nombre descriptivo para la ruta basado en sus características.
-    Esto ayuda al usuario a identificar rutas alternativas.
-    """
     if fila_ruta is None:
         return "Ruta no especificada"
 
-    # Obtener distancias
     km_plano = float(fila_ruta.get("KM_PLANO", 0))
     km_ondulado = float(fila_ruta.get("KM_ONDULADO", 0))
     km_montañoso = float(fila_ruta.get("KM_MONTAÑOSO", 0))
@@ -104,7 +122,6 @@ def obtener_nombre_ruta(fila_ruta):
     km_despav = float(fila_ruta.get("KM_DESPAVIMENTADO", 0))
     km_total = km_plano + km_ondulado + km_montañoso + km_urbano + km_despav
 
-    # Determinar tipo predominante
     distancias = {
         "Plana": km_plano,
         "Ondulada": km_ondulado,
@@ -116,12 +133,10 @@ def obtener_nombre_ruta(fila_ruta):
     tipo_principal = max(distancias.items(), key=lambda x: x[1])[0]
     porcentaje = (distancias[tipo_principal] / km_total * 100) if km_total > 0 else 0
 
-    # Construir nombre
     nombre = f"Vía {tipo_principal}"
     if porcentaje > 60:
         nombre += f" ({porcentaje:.0f}%)"
 
-    # Agregar info adicional si existe en el DataFrame
     if "NOMBRE_RUTA" in fila_ruta.index and pd.notna(fila_ruta.get("NOMBRE_RUTA")):
         nombre = str(fila_ruta["NOMBRE_RUTA"])
 
@@ -129,20 +144,15 @@ def obtener_nombre_ruta(fila_ruta):
 
 
 # =========================
-# 🆕 ENDPOINT: BUSCAR RUTA POR ID (RÁPIDO)
+# ENDPOINT: BUSCAR RUTA POR ID
 # =========================
 @app.get("/ruta/{id_ruta}")
 def obtener_ruta_por_id(id_ruta: str):
-    """
-    🚀 RÁPIDO: Obtiene información de una ruta específica por su ID.
-    No requiere búsqueda de municipios.
-    """
     fila_ruta, info = helper.buscar_ruta_por_id(id_ruta, df_rutas)
 
     if fila_ruta is None:
         raise HTTPException(status_code=404, detail=info.get("error"))
 
-    # Obtener nombres de municipios
     origen_muni = helper.obtener_municipio_por_codigo(info["origen"])
     destino_muni = helper.obtener_municipio_por_codigo(info["destino"])
 
@@ -178,7 +188,6 @@ def listar_rutas_disponibles(
     origen: str = Query(..., description="Nombre del municipio de origen"),
     destino: str = Query(..., description="Nombre del municipio de destino")
 ):
-    """Lista todas las rutas disponibles entre dos municipios."""
     lista_rutas, info = helper.buscar_todas_las_rutas(origen, destino, df_rutas)
 
     if not lista_rutas:
@@ -193,7 +202,6 @@ def listar_rutas_disponibles(
             }
         )
 
-    # Formatear rutas con nombres descriptivos
     rutas_formateadas = []
     for ruta in lista_rutas:
         id_ruta = ruta.get("ID_SICE")
@@ -227,31 +235,23 @@ def listar_rutas_disponibles(
 @app.post("/consulta")
 def calcular_sicetac(data: ConsultaInput):
 
-    # =========================
-    # 🚀 OPCIÓN 1: CÁLCULO RÁPIDO POR ID DE RUTA
-    # =========================
+    # -------------------------
+    # 1) Resolver ruta
+    # -------------------------
     if data.id_ruta:
-        # Buscar ruta directamente por ID (MÁS RÁPIDO)
         fila_ruta, info_ruta = helper.buscar_ruta_por_id(data.id_ruta, df_rutas)
-
         if fila_ruta is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No se encontró la ruta con ID: {data.id_ruta}"
-            )
+            raise HTTPException(status_code=404, detail=f"No se encontró la ruta con ID: {data.id_ruta}")
 
-        # Obtener códigos de origen/destino de la ruta
         cod_origen = int(fila_ruta["codigo_dane_origen"])
         cod_destino = int(fila_ruta["codigo_dane_destino"])
 
-        # Obtener nombres (solo para respuesta, no para cálculo)
         origen_muni = helper.obtener_municipio_por_codigo(cod_origen)
         destino_muni = helper.obtener_municipio_por_codigo(cod_destino)
 
         origen_nombre = origen_muni["nombre_oficial"] if origen_muni is not None else "Desconocido"
         destino_nombre = destino_muni["nombre_oficial"] if destino_muni is not None else "Desconocido"
 
-        # Info de ruta
         info_ruta_response = {
             "metodo_busqueda": "directo_por_id",
             "ruta_id": data.id_ruta,
@@ -260,32 +260,21 @@ def calcular_sicetac(data: ConsultaInput):
             "mensaje": f"Ruta {data.id_ruta} ({origen_nombre} → {destino_nombre})"
         }
 
-    # =========================
-    # 🔍 OPCIÓN 2: BÚSQUEDA POR ORIGEN/DESTINO
-    # =========================
     elif data.origen and data.destino:
-        # Validar municipios
         origen_info = helper.buscar_municipio(data.origen)
         destino_info = helper.buscar_municipio(data.destino)
 
         if not origen_info or not destino_info:
-            raise HTTPException(
-                status_code=404,
-                detail="Origen o destino no encontrado en la base de datos"
-            )
+            raise HTTPException(status_code=404, detail="Origen o destino no encontrado en la base de datos")
 
         cod_origen = int(origen_info["codigo_dane"])
         cod_destino = int(destino_info["codigo_dane"])
         origen_nombre = origen_info.get("nombre_oficial")
         destino_nombre = destino_info.get("nombre_oficial")
 
-        # Buscar rutas por códigos (optimizado)
-        lista_rutas, info_busqueda = helper.buscar_todas_las_rutas_por_codigos(
-            cod_origen, cod_destino, df_rutas
-        )
+        lista_rutas, info_busqueda = helper.buscar_todas_las_rutas_por_codigos(cod_origen, cod_destino, df_rutas)
 
         if not lista_rutas:
-            # Ruta no existe
             distancias_disponibles = any([
                 data.km_plano, data.km_ondulado, data.km_montañoso,
                 data.km_urbano, data.km_despavimentado
@@ -302,7 +291,6 @@ def calcular_sicetac(data: ConsultaInput):
                     }
                 )
 
-            # Usar distancias manuales
             fila_ruta = None
             info_ruta_response = {
                 "metodo_busqueda": "distancias_manuales",
@@ -311,7 +299,7 @@ def calcular_sicetac(data: ConsultaInput):
                 "mensaje": f"Ruta {origen_nombre} → {destino_nombre} no registrada. Usando distancias manuales."
             }
         else:
-            # Usar PRIMERA ruta encontrada
+            # IMPORTANTE: asumimos que helper ya devuelve ordenado por ID_SICE asc (principal primero)
             id_ruta_seleccionada = lista_rutas[0]["ID_SICE"]
             fila_ruta = df_rutas[df_rutas["ID_SICE"] == id_ruta_seleccionada].iloc[0]
 
@@ -324,13 +312,11 @@ def calcular_sicetac(data: ConsultaInput):
                 "mensaje": f"Ruta encontrada: {origen_nombre} → {destino_nombre}"
             }
 
-            # Listar alternativas si existen
             if len(lista_rutas) > 1:
                 info_ruta_response["rutas_alternativas"] = []
                 for ruta_alt in lista_rutas[1:]:
                     id_alt = ruta_alt["ID_SICE"]
                     fila_alt = df_rutas[df_rutas["ID_SICE"] == id_alt].iloc[0]
-
                     info_ruta_response["rutas_alternativas"].append({
                         "id_sice": str(id_alt),
                         "nombre_ruta": obtener_nombre_ruta(fila_alt),
@@ -338,19 +324,15 @@ def calcular_sicetac(data: ConsultaInput):
                     })
 
                 info_ruta_response["mensaje"] += f" ({len(lista_rutas)} rutas disponibles)"
-                info_ruta_response["recomendacion"] = (
-                    f"Para cálculos futuros más rápidos, use: id_ruta='{id_ruta_seleccionada}'"
-                )
+                info_ruta_response["recomendacion"] = f"Para cálculos futuros más rápidos, use: id_ruta='{id_ruta_seleccionada}'"
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="Debe proporcionar 'id_ruta' O 'origen' y 'destino'"
-        )
+        raise HTTPException(status_code=400, detail="Debe proporcionar 'id_ruta' O 'origen' y 'destino'")
 
-    # =========================
-    # 📏 PREPARAR DISTANCIAS
-    # =========================
-    vehiculo = data.vehiculo.strip().upper()
+    # -------------------------
+    # 2) Preparar distancias
+    # -------------------------
+    vehiculo_sicetac = data.vehiculo.strip().upper().replace(" ", "")
+    vehiculo_stats = traducir_configuracion_analisis(vehiculo_sicetac)  # ✅ 3S3
 
     distancias_manuales = any([
         data.km_plano, data.km_ondulado, data.km_montañoso,
@@ -358,7 +340,6 @@ def calcular_sicetac(data: ConsultaInput):
     ])
 
     if fila_ruta is not None and not distancias_manuales:
-        # Usar distancias de SICETAC
         distancias = {
             "KM_PLANO": float(fila_ruta.get("KM_PLANO", 0)),
             "KM_ONDULADO": float(fila_ruta.get("KM_ONDULADO", 0)),
@@ -367,7 +348,6 @@ def calcular_sicetac(data: ConsultaInput):
             "KM_DESPAVIMENTADO": float(fila_ruta.get("KM_DESPAVIMENTADO", 0)),
         }
     else:
-        # Usar distancias manuales
         distancias = {
             "KM_PLANO": data.km_plano,
             "KM_ONDULADO": data.km_ondulado,
@@ -377,13 +357,13 @@ def calcular_sicetac(data: ConsultaInput):
         }
         info_ruta_response["usando_distancias_manuales"] = True
 
-    # =========================
-    # 💰 CALCULAR SICETAC
-    # =========================
+    # -------------------------
+    # 3) Calcular SICETAC (SIEMPRE con vehiculo_sicetac)
+    # -------------------------
     resultado = calcular_modelo_sicetac_extendido(
         origen=origen_nombre,
         destino=destino_nombre,
-        configuracion=vehiculo,
+        configuracion=vehiculo_sicetac,
         serie=data.mes,
         distancias=distancias,
         valor_peaje_manual=data.valor_peaje_manual,
@@ -399,41 +379,42 @@ def calcular_sicetac(data: ConsultaInput):
 
     resultado = convertir_nativos(resultado)
 
-    # =========================
-    # 📊 RESPUESTA
-    # =========================
-    llave_mercado = f"{cod_origen}-{cod_destino}-{vehiculo}"
+    # -------------------------
+    # 4) Respuesta base
+    # -------------------------
+    llave_mercado = f"{cod_origen}-{cod_destino}-{vehiculo_sicetac}"
     valor_mercado = obtener_valores_promedio_mercado_por_llave(llave_mercado)
 
     respuesta = {
         "SICETAC": resultado,
         "MODO_VIAJE": data.modo_viaje,
         "VALOR_MERCADO_RNDC": valor_mercado,
-        "INFO_RUTA": info_ruta_response
+        "INFO_RUTA": info_ruta_response,
+        "VEHICULO": {
+            "sicetac": vehiculo_sicetac,
+            "estadisticas": vehiculo_stats
+        }
     }
 
-    # Estadísticas (opcional) - robusto para NO tumbar SICETAC
+    # -------------------------
+    # 5) Estadísticas/contexto (SIEMPRE con vehiculo_stats)
+    # -------------------------
     if estadistica_activado(data.estadistica):
         try:
             respuesta.update({
-                # ✅ FIX: llamada posicional (evita TypeError por keywords)
                 "ESTADISTICAS": obtener_estadisticas_completas(cod_origen, cod_destino),
 
-                "INDICADORES_ORIGEN": obtener_indicadores(cod_origen, vehiculo),
-                "INDICADORES_DESTINO": obtener_indicadores(cod_destino, vehiculo),
-                "COMPETITIVIDAD": evaluar_competitividad(cod_origen, cod_destino, vehiculo),
-                "MESES_INDICADORES_ORIGEN": obtener_meses_disponibles_indicador(
-                    df_indicadores, cod_origen, vehiculo
-                ),
-                "MESES_INDICADORES_DESTINO": obtener_meses_disponibles_indicador(
-                    df_indicadores, cod_destino, vehiculo
-                )
+                "INDICADORES_ORIGEN": obtener_indicadores(cod_origen, vehiculo_stats),
+                "INDICADORES_DESTINO": obtener_indicadores(cod_destino, vehiculo_stats),
+                "COMPETITIVIDAD": evaluar_competitividad(cod_origen, cod_destino, vehiculo_stats),
+                "MESES_INDICADORES_ORIGEN": obtener_meses_disponibles_indicador(df_indicadores, cod_origen, vehiculo_stats),
+                "MESES_INDICADORES_DESTINO": obtener_meses_disponibles_indicador(df_indicadores, cod_destino, vehiculo_stats),
             })
         except Exception as e:
-            # Nunca rompas /consulta por estadísticas
             respuesta["ESTADISTICAS"] = {
                 "warning": "No se pudieron generar estadísticas/contexto",
-                "error": str(e)
+                "error": str(e),
+                "vehiculo_stats": vehiculo_stats
             }
 
     return JSONResponse(content=respuesta)
@@ -447,22 +428,7 @@ def head_root():
 
 @app.get("/")
 def root():
-    return {
-        "message": "API SICETAC",
-        "version": "2.1.0",
-        "mejoras": [
-            "🚀 Búsqueda directa por ID de ruta (más rápido)",
-            "✅ Nombres descriptivos para rutas alternativas",
-            "⚡ Optimización: solo busca municipios 1 vez",
-            "📋 Endpoint GET /ruta/{id_ruta} para info rápida"
-        ],
-        "ejemplos": {
-            "calculo_rapido": "POST /consulta con id_ruta='123'",
-            "calculo_normal": "POST /consulta con origen='Bogotá' y destino='Medellín'",
-            "info_ruta": "GET /ruta/123",
-            "listar_rutas": "GET /rutas/disponibles?origen=Bogotá&destino=Medellín"
-        }
-    }
+    return {"message": "API SICETAC", "version": "2.1.0"}
 
 
 @app.get("/health")
